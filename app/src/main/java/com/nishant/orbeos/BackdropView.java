@@ -58,7 +58,7 @@ final class BackdropView extends FrameLayout {
         shade.bringToFront();
         next.animate().cancel();
         prev.animate().cancel();
-        float target = blur == null ? 0f : (Theme.light ? 0.55f : 0.8f);
+        float target = blur == null ? 0f : (Theme.light ? 0.55f : 0.9f);
         if (dur == 0) {
             next.setAlpha(target);
             prev.setAlpha(0f);

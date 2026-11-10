@@ -80,7 +80,25 @@ final class Theme {
         boxBlur(s, 3);
         boxBlur(s, 3);
         boxBlur(s, 2);
+        // Deepen and enrich the colours so the shelf stays dark and text stays readable.
+        int[] px = new int[w * h];
+        s.getPixels(px, 0, w, 0, 0, w, h);
+        for (int i = 0; i < px.length; i++) {
+            int p = px[i];
+            float rr = (p >> 16) & 255, gg = (p >> 8) & 255, bb = p & 255;
+            float l = 0.3f * rr + 0.59f * gg + 0.11f * bb;
+            rr = l + (rr - l) * 1.5f;
+            gg = l + (gg - l) * 1.5f;
+            bb = l + (bb - l) * 1.5f;
+            float k = light ? 0.95f : 0.55f;
+            px[i] = 0xFF000000 | (clamp(rr * k) << 16) | (clamp(gg * k) << 8) | clamp(bb * k);
+        }
+        s.setPixels(px, 0, w, 0, 0, w, h);
         return s;
+    }
+
+    private static int clamp(float v) {
+        return v < 0 ? 0 : v > 255 ? 255 : (int) v;
     }
 
     static void boxBlur(Bitmap bmp, int r) {

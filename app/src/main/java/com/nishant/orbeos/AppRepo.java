@@ -182,7 +182,15 @@ final class AppRepo {
                 boolean banner = false;
                 try {
                     ActivityInfo ai = pm.getActivityInfo(a.cn, 0);
-                    Drawable d = ai.loadBanner(pm);
+                    // TV banners live in different places depending on the app and the TV maker.
+                    Drawable d = null;
+                    try { d = pm.getActivityBanner(a.cn); } catch (Throwable ignored) { }
+                    if (d == null) try { d = pm.getApplicationBanner(a.pkg); } catch (Throwable ignored) { }
+                    if (d == null) try {
+                        Intent li = pm.getLeanbackLaunchIntentForPackage(a.pkg);
+                        if (li != null) d = pm.getActivityBanner(li);
+                    } catch (Throwable ignored) { }
+                    if (d == null) d = ai.loadBanner(pm);
                     if (d != null) {
                         out = Bitmap.createBitmap(tw, th, Bitmap.Config.RGB_565);
                         Canvas c = new Canvas(out);
@@ -200,10 +208,8 @@ final class AppRepo {
                     } else {
                         d = ai.loadIcon(pm);
                         if (d != null) {
-                            out = Bitmap.createBitmap(iconPx, iconPx, Bitmap.Config.ARGB_8888);
-                            Canvas c = new Canvas(out);
-                            d.setBounds(0, 0, iconPx, iconPx);
-                            d.draw(c);
+                            out = iconPoster(d, tw, th);
+                            banner = true;
                         }
                     }
                 } catch (Throwable ignored) {
@@ -224,5 +230,44 @@ final class AppRepo {
                 });
             }
         });
+    }
+
+    /**
+     * No TV banner: build a full card from the app icon instead. The card is filled
+     * with the icon's own average colour (with a soft top light) and the icon sits large
+     * in the middle, so every tile is colourful and edge-to-edge.
+     */
+    private static Bitmap iconPoster(Drawable icon, int tw, int th) {
+        int s = Math.round(th * 0.62f);
+        Bitmap ic = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas ci = new Canvas(ic);
+        icon.setBounds(0, 0, s, s);
+        icon.draw(ci);
+
+        int[] px = new int[s * s];
+        ic.getPixels(px, 0, s, 0, 0, s, s);
+        long r = 0, g = 0, b = 0, n = 0;
+        for (int i = 0; i < px.length; i += 3) {
+            int p = px[i];
+            if ((p >>> 24) < 160) continue;
+            r += (p >> 16) & 255;
+            g += (p >> 8) & 255;
+            b += p & 255;
+            n++;
+        }
+        int base = n == 0 ? 0xFF2A2F3D : 0xFF000000
+                | ((int) (r / n * 0.78) << 16) | ((int) (g / n * 0.78) << 8) | (int) (b / n * 0.78);
+
+        Bitmap out = Bitmap.createBitmap(tw, th, Bitmap.Config.RGB_565);
+        Canvas c = new Canvas(out);
+        c.drawColor(base);
+        android.graphics.Paint light = new android.graphics.Paint();
+        light.setShader(new android.graphics.LinearGradient(0, 0, 0, th,
+                0x33FFFFFF, 0x26000000, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, tw, th, light);
+        android.graphics.Paint shadow = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        c.drawBitmap(ic, (tw - s) / 2f, (th - s) / 2f, shadow);
+        ic.recycle();
+        return out;
     }
 }

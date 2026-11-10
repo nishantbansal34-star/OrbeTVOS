@@ -732,7 +732,7 @@ public final class MainActivity extends Activity {
         dock.addView(glass, gl);
         dockRow = new LinearLayout(this);
         dockScroll = rowScroller(dockRow);
-        dockScroll.setPadding(padH, dp(22), padH, dp(2));
+        dockScroll.setPadding(padH, dp(22), padH, dp(14));
         dock.addView(dockScroll, new FrameLayout.LayoutParams(MATCH, WRAP));
         col.addView(dock, new LinearLayout.LayoutParams(MATCH, WRAP));
 
@@ -909,6 +909,7 @@ public final class MainActivity extends Activity {
                 if (!has) return;
                 setHero(a.kind, a.label, "OK to open  ·  Hold OK for options");
                 if (currentPage == PAGE_HOME) backdrop.show(t.art());
+                if (section.equals("apps")) scrollHomeTop();
             }
         });
         if (section.equals("apps")) {
@@ -934,9 +935,21 @@ public final class MainActivity extends Activity {
                 if (!has) return;
                 setHero(heroK, heroT, heroL);
                 if (currentPage == PAGE_HOME) backdrop.show(null);
+                if (v.getParent() == dockRow) scrollHomeTop();
             }
         });
         return t;
+    }
+
+    private void scrollHomeTop() {
+        if (homeScroll == null || homeScroll.getScrollY() == 0) return;
+        // After the focus system's own scroll has run, bring the whole shelf back.
+        homeScroll.post(new Runnable() {
+            @Override
+            public void run() {
+                homeScroll.smoothScrollTo(0, 0);
+            }
+        });
     }
 
     private void focusFirstTile() {
