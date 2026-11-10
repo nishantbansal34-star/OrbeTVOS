@@ -77,8 +77,8 @@ public final class MainActivity extends Activity {
             "com.google.android.youtube.tvmusic",
     };
     /** Rows below the dock. (My Apps always lives in the dock.) */
-    private static final String[] SECTION_IDS = {"recent", "inputs", "installed", "games", "music"};
-    private static final String[] SECTION_NAMES = {"Recently Opened", "Inputs", "Recently Installed", "Games", "Music"};
+    private static final String[] SECTION_IDS = {"series", "recent", "inputs", "installed", "games", "music"};
+    private static final String[] SECTION_NAMES = {"Series for you", "Recently Opened", "Inputs", "Recently Installed", "Games", "Music"};
     private static final String DEFAULT_OFF = "installed,games,music";
 
     private static final int PAGE_HOME = 0, PAGE_APPS = 1, PAGE_SEARCH = 2;
@@ -121,7 +121,18 @@ public final class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private float density;
-    private int padH, gap, tileW, tileH, labelH, iconPx, shelfH;
+    private int padH, gap, tileW, tileH, labelH, iconPx, shelfH, posterW, posterH;
+
+    // Live widgets & recommendations
+    private WidgetView weatherWidget, timeWidget;
+    private Weather.Now weather;
+    private long weatherTried;
+    private List<Series.Show> series = new ArrayList<>();
+    private long seriesAt;
+    private boolean seriesLoading;
+    private java.util.LinkedHashMap<String, Long> watchToday = new java.util.LinkedHashMap<>();
+    private java.util.LinkedHashMap<String, Long> watchWeek = new java.util.LinkedHashMap<>();
+    private boolean usageAllowed;
 
     private List<AppRepo.AppEntry> apps = new ArrayList<>();
     private List<AppRepo.InputEntry> inputs = new ArrayList<>();
@@ -184,6 +195,7 @@ public final class MainActivity extends Activity {
         @Override
         public void onReceive(Context c, Intent i) {
             updateClock();
+            if (System.currentTimeMillis() - weatherTried > 30 * 60_000L) refreshWeather();
         }
     };
 
@@ -241,6 +253,7 @@ public final class MainActivity extends Activity {
                 t.ensureArt();
             }
         });
+        refreshLive();
     }
 
     @Override
@@ -373,7 +386,11 @@ public final class MainActivity extends Activity {
         for (String s : csv(prefs.getString("sections", ""))) {
             if (indexOf(SECTION_IDS, s) >= 0 && !sectionOrder.contains(s)) sectionOrder.add(s);
         }
-        for (String s : SECTION_IDS) if (!sectionOrder.contains(s)) sectionOrder.add(s);
+        for (String s : SECTION_IDS) {
+            if (sectionOrder.contains(s)) continue;
+            if (s.equals("series")) sectionOrder.add(0, s);   // new in 2.2: goes first
+            else sectionOrder.add(s);
+        }
         sectionOff.clear();
         sectionOff.addAll(csv(prefs.getString("sectionsOff", DEFAULT_OFF)));
         sortMode = prefs.getInt("sort", 0);
@@ -460,6 +477,8 @@ public final class MainActivity extends Activity {
         labelH = dp(30);
         iconPx = Math.round(tileH * 0.52f);
         shelfH = Math.round(dm.heightPixels * 0.54f);
+        posterW = Math.round(tileW * 0.62f);
+        posterH = posterW * 3 / 2;
     }
 
     private void applyWallpaper() {
@@ -713,13 +732,54 @@ public final class MainActivity extends Activity {
         heroTitle = text(56, "sans-serif", Typeface.BOLD, Theme.text);
         heroTitle.setShadowLayer(dp(12), 0, dp(2), 0x66000000);
         heroLine = text(17, "sans-serif", Typeface.NORMAL, Theme.text2);
-        heroBox.addView(heroKind, new LinearLayout.LayoutParams(dp(720), dp(24)));
-        heroBox.addView(heroTitle, new LinearLayout.LayoutParams(dp(720), dp(76)));
-        heroBox.addView(heroLine, new LinearLayout.LayoutParams(dp(720), dp(26)));
+        heroBox.addView(heroKind, new LinearLayout.LayoutParams(dp(450), dp(24)));
+        heroBox.addView(heroTitle, new LinearLayout.LayoutParams(dp(450), dp(76)));
+        heroBox.addView(heroLine, new LinearLayout.LayoutParams(dp(450), dp(26)));
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM | Gravity.START);
         hlp.setMargins(padH, 0, 0, dp(22));
         shelf.addView(heroBox, hlp);
         hero = heroBox;
+
+        // Live widgets, bottom-right of the shelf.
+        LinearLayout widgets = new LinearLayout(this);
+        widgets.setOrientation(LinearLayout.HORIZONTAL);
+        widgets.setClipChildren(false);
+        weatherWidget = new WidgetView(this, 186, 118, density);
+        weatherWidget.headIcon = Icons.SUN;
+        weatherWidget.set(dateShort(), "--°", "Getting weather…");
+        weatherWidget.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                askCity();
+            }
+        });
+        timeWidget = new WidgetView(this, 186, 118, density);
+        timeWidget.headIcon = Icons.HOURGLASS;
+        timeWidget.set("Watch time today", "--", "");
+        timeWidget.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openWatchTime();
+            }
+        });
+        View.OnFocusChangeListener toTop = new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean has) {
+                if (has) scrollHomeTop();
+            }
+        };
+        weatherWidget.setOnFocusChangeListener(toTop);
+        timeWidget.setOnFocusChangeListener(toTop);
+        widgets.addView(weatherWidget);
+        LinearLayout.LayoutParams twl = new LinearLayout.LayoutParams(WRAP, WRAP);
+        twl.leftMargin = dp(12);
+        widgets.addView(timeWidget, twl);
+        FrameLayout.LayoutParams wlp = new FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM | Gravity.END);
+        wlp.setMargins(0, 0, padH, dp(24));
+        shelf.addView(widgets, wlp);
+        if (weather != null) showWeather();
+        showWatchTime();
+
         col.addView(shelf, new LinearLayout.LayoutParams(MATCH, shelfH));
 
         // Glass dock with My Apps.
@@ -825,7 +885,11 @@ public final class MainActivity extends Activity {
         box.addView(t, new LinearLayout.LayoutParams(MATCH, WRAP));
         LinearLayout row = new LinearLayout(this);
         HorizontalScrollView hsv = rowScroller(row);
-        for (View v : tiles) row.addView(v, tileParams());
+        for (View v : tiles) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            lp.rightMargin = gap;
+            row.addView(v, lp);
+        }
         box.addView(hsv, new LinearLayout.LayoutParams(MATCH, WRAP));
         return row;
     }
@@ -833,6 +897,9 @@ public final class MainActivity extends Activity {
     private List<View> tilesFor(String id) {
         ArrayList<View> out = new ArrayList<>();
         switch (id) {
+            case "series":
+                for (Series.Show sh : series) out.add(posterTile(sh));
+                break;
             case "recent": {
                 int n = 0;
                 for (String pkg : recents) {
@@ -939,6 +1006,282 @@ public final class MainActivity extends Activity {
             }
         });
         return t;
+    }
+
+    private TileView posterTile(final Series.Show sh) {
+        final TileView t = new TileView(this, posterW, posterH, labelH, iconPx, density, true);
+        t.bindRemote("poster:" + sh.id, sh.image, sh.name);
+        t.setTag("series:" + sh.id);
+        final AppRepo.AppEntry app = sh.pkg != null ? find(sh.pkg) : null;
+        final String where = app != null ? app.label : (sh.channel.isEmpty() ? "Streaming" : sh.channel);
+        t.artReady = new Runnable() {
+            @Override
+            public void run() {
+                if (currentPage == PAGE_HOME) backdrop.show(t.art());
+            }
+        };
+        t.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean has) {
+                if (!has) return;
+                String meta = sh.episode + (sh.rating > 0 ? "  ·  ★ " + sh.rating : "")
+                        + (app != null ? "  ·  OK to find it" : "  ·  Not on your apps");
+                setHero(where + (sh.genres.isEmpty() ? "" : "  ·  " + sh.genres), sh.name, meta);
+                if (currentPage == PAGE_HOME) backdrop.show(t.art());
+            }
+        });
+        t.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                systemSearch(sh.name);
+            }
+        });
+        t.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (app != null) launchApp(app);
+                else systemSearch(sh.name);
+                return true;
+            }
+        });
+        return t;
+    }
+
+    private String dateShort() {
+        return new SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(new Date());
+    }
+
+    /** Weather every 30 min, watch time on every return home, series every 6 h. */
+    private void refreshLive() {
+        if (System.currentTimeMillis() - weatherTried > 30 * 60_000L || weather == null) refreshWeather();
+        refreshWatchTime();
+    }
+
+    private void refreshWeather() {
+        weatherTried = System.currentTimeMillis();
+        final double lat = Double.longBitsToDouble(prefs.getLong("wLat", Double.doubleToLongBits(27.8974)));
+        final double lon = Double.longBitsToDouble(prefs.getLong("wLon", Double.doubleToLongBits(78.0880)));
+        final String city = prefs.getString("wCity", "Aligarh");
+        AppRepo.runNetwork(new Runnable() {
+            @Override
+            public void run() {
+                Weather.Now n = null;
+                try {
+                    n = Weather.fetch(lat, lon, city);
+                } catch (Throwable ignored) {
+                }
+                final Weather.Now res = n;
+                AppRepo.MAIN.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (res != null) {
+                            weather = res;
+                            showWeather();
+                        } else if (weather == null && weatherWidget != null) {
+                            weatherWidget.set(city + "  ·  " + dateShort(), "--°", "Weather unavailable");
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void showWeather() {
+        if (weatherWidget == null || weather == null) return;
+        weatherWidget.sideIcon = Weather.icon(weather.code, weather.day);
+        weatherWidget.headIcon = Icons.CLOCK;
+        weatherWidget.set(weather.city + "  ·  " + dateShort(), Math.round(weather.temp) + "°",
+                Weather.describe(weather.code) + "  ·  H " + Math.round(weather.hi) + "°  L " + Math.round(weather.lo) + "°");
+    }
+
+    private void refreshWatchTime() {
+        final Context ctx = getApplicationContext();
+        AppRepo.runBackground(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = ScreenTime.allowed(ctx);
+                final java.util.LinkedHashMap<String, Long> t = ok ? ScreenTime.today(ctx) : new java.util.LinkedHashMap<String, Long>();
+                final java.util.LinkedHashMap<String, Long> w = ok ? ScreenTime.week(ctx) : new java.util.LinkedHashMap<String, Long>();
+                AppRepo.MAIN.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        usageAllowed = ok;
+                        watchToday = t;
+                        watchWeek = w;
+                        showWatchTime();
+                        if (series.isEmpty() || System.currentTimeMillis() - seriesAt > 6 * 3600_000L) refreshSeries();
+                    }
+                });
+            }
+        });
+    }
+
+    private void showWatchTime() {
+        if (timeWidget == null) return;
+        if (!usageAllowed) {
+            timeWidget.bars = null;
+            timeWidget.set("Watch time today", "—", "Press OK to turn on");
+            return;
+        }
+        long total = ScreenTime.sum(watchToday);
+        float[] bars = new float[Math.min(3, watchToday.size())];
+        StringBuilder top = new StringBuilder();
+        int i = 0;
+        for (java.util.Map.Entry<String, Long> e : watchToday.entrySet()) {
+            if (i >= 3) break;
+            bars[i] = total > 0 ? e.getValue() / (float) total : 0f;
+            if (i < 2) {
+                AppRepo.AppEntry a = find(e.getKey());
+                if (top.length() > 0) top.append("  ·  ");
+                top.append(a != null ? a.label : e.getKey()).append(' ').append(ScreenTime.fmt(e.getValue()));
+            }
+            i++;
+        }
+        timeWidget.bars = bars;
+        timeWidget.set("Watch time today", ScreenTime.fmt(total), top.length() > 0 ? top.toString() : "Nothing watched yet");
+    }
+
+    private void refreshSeries() {
+        if (seriesLoading || apps.isEmpty()) return;
+        seriesLoading = true;
+        final List<AppRepo.AppEntry> appsNow = apps;
+        final java.util.LinkedHashMap<String, Long> week = watchWeek;
+        AppRepo.runNetwork(new Runnable() {
+            @Override
+            public void run() {
+                List<Series.Show> got = null;
+                try {
+                    got = Series.fetch(appsNow, week);
+                } catch (Throwable ignored) {
+                }
+                final List<Series.Show> res = got;
+                AppRepo.MAIN.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        seriesLoading = false;
+                        if (res == null || res.isEmpty()) return;
+                        series = res;
+                        seriesAt = System.currentTimeMillis();
+                        buildSections();
+                    }
+                });
+            }
+        });
+    }
+
+    private void askCity() {
+        final EditText in = new EditText(this);
+        in.setSingleLine(true);
+        in.setHint("City, e.g. Aligarh");
+        in.setText(prefs.getString("wCity", "Aligarh"));
+        in.setSelectAllOnFocus(true);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Weather city")
+                .setView(in)
+                .setPositiveButton("Save", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        final String name = in.getText().toString().trim();
+                        if (name.isEmpty()) return;
+                        AppRepo.runNetwork(new Runnable() {
+                            @Override
+                            public void run() {
+                                String[] g = null;
+                                try {
+                                    g = Weather.geocode(name);
+                                } catch (Throwable ignored) {
+                                }
+                                final String[] res = g;
+                                AppRepo.MAIN.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (res == null) {
+                                            Toast.makeText(MainActivity.this, "Couldn't find “" + name + "”", Toast.LENGTH_SHORT).show();
+                                            return;
+                                        }
+                                        prefs.edit().putString("wCity", res[0])
+                                                .putLong("wLat", Double.doubleToLongBits(Double.parseDouble(res[1])))
+                                                .putLong("wLon", Double.doubleToLongBits(Double.parseDouble(res[2]))).apply();
+                                        refreshWeather();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Watch-time report: today per app, and the last 7 days. */
+    private void openWatchTime() {
+        View ret = getCurrentFocus();
+        LinearLayout p = panel(Theme.ROLE_GLASS, dp(460), true);
+        TextView title = text(28, "sans-serif", Typeface.BOLD, Theme.text);
+        title.setText("Watch time");
+        title.setPadding(dp(16), 0, 0, dp(2));
+        p.addView(title);
+        LinearLayout list = new LinearLayout(this);
+        View first;
+        if (!usageAllowed) {
+            TextView t = text(16, "sans-serif", Typeface.NORMAL, Theme.text2);
+            t.setSingleLine(false);
+            t.setText("ORBÉ needs Usage access to show how long you watch each app. Nothing leaves your TV.");
+            t.setPadding(dp(16), dp(8), dp(16), dp(12));
+            list.addView(t);
+            RowView allow = row(Icons.SHIELD, "Turn on Usage access", null, new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeOverlay(false);
+                    openSetting(Settings.ACTION_USAGE_ACCESS_SETTINGS);
+                }
+            });
+            list.addView(allow);
+            first = allow;
+        } else {
+            long today = ScreenTime.sum(watchToday), week = ScreenTime.sum(watchWeek);
+            TextView sub = text(15, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
+            sub.setText("Today " + ScreenTime.fmt(today) + "   ·   Last 7 days " + ScreenTime.fmt(week)
+                    + "   ·   Daily avg " + ScreenTime.fmt(week / 7));
+            sub.setPadding(dp(16), dp(2), 0, dp(4));
+            p.addView(sub);
+            first = null;
+            list.addView(label("Today"));
+            first = addUsageRows(list, watchToday, 8);
+            list.addView(label("Last 7 days"));
+            View w = addUsageRows(list, watchWeek, 8);
+            if (first == null) first = w;
+            if (first == null) {
+                RowView none = row(Icons.TV, "Nothing watched yet", null, null);
+                list.addView(none);
+                first = none;
+            }
+        }
+        p.addView(scrollList(list));
+        showOverlay(p, ret, first);
+    }
+
+    private View addUsageRows(LinearLayout list, java.util.Map<String, Long> m, int max) {
+        long top = 0;
+        for (long v : m.values()) top = Math.max(top, v);
+        View first = null;
+        int n = 0;
+        for (java.util.Map.Entry<String, Long> e : m.entrySet()) {
+            if (n++ >= max) break;
+            final AppRepo.AppEntry a = find(e.getKey());
+            RowView r = row(0, a != null ? a.label : e.getKey(), ScreenTime.fmt(e.getValue()), a == null ? null
+                    : new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeOverlay(false);
+                    launchApp(a);
+                }
+            });
+            r.level = top > 0 ? e.getValue() / (float) top : 0f;
+            list.addView(r);
+            if (first == null) first = r;
+        }
+        return first;
     }
 
     private void scrollHomeTop() {
@@ -1639,6 +1982,22 @@ public final class MainActivity extends Activity {
             sectionList.addView(r);
         }
         list.addView(sectionList);
+
+        list.addView(label("Widgets"));
+        list.addView(row(Icons.SUN, "Weather city", prefs.getString("wCity", "Aligarh"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeOverlay(false);
+                askCity();
+            }
+        }));
+        list.addView(row(Icons.HOURGLASS, "Watch time", usageAllowed ? "On" : "Off", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeOverlay(false);
+                openWatchTime();
+            }
+        }));
 
         list.addView(label("Apps"));
         int nHidden = 0;

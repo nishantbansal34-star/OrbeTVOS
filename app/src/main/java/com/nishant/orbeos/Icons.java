@@ -11,7 +11,8 @@ final class Icons {
             INPUT = 7, BLUETOOTH = 8, DISPLAY = 9, SOUND = 10, GRID = 11, PLUS = 12, INFO = 13,
             TRASH = 14, HIDE = 15, MOVE = 16, CAST = 17, MOON = 18, ACCESS = 19, CLOCK = 20,
             STORAGE = 21, STAR = 22, OPEN = 23, SHIELD = 24, MUTE = 25, PALETTE = 26, LAYERS = 27,
-            MOTION = 28, EYE = 29, GAME = 30, MUSIC = 31, CHIP = 32;
+            MOTION = 28, EYE = 29, GAME = 30, MUSIC = 31, CHIP = 32,
+            SUN = 40, CLOUD = 41, RAIN = 42, STORM = 43, SNOW = 44, FOG = 45, PARTLY = 46, NIGHT = 47, HOURGLASS = 48, TV = 49;
 
     private static final Path P = new Path();
     private static final RectF R = new RectF();
@@ -266,6 +267,78 @@ final class Icons {
                     c.drawLine(l + o, t + s * 0.1f, l + o, t + s * 0.24f, p);
                     c.drawLine(l + o, b - s * 0.24f, l + o, b - s * 0.1f, p);
                 }
+                break;
+            case SUN:
+                c.drawCircle(cx, cy, s * 0.17f, p);
+                for (int i = 0; i < 8; i++) {
+                    double a = Math.PI / 4 * i;
+                    float ca = (float) Math.cos(a), sa = (float) Math.sin(a);
+                    c.drawLine(cx + ca * s * 0.28f, cy + sa * s * 0.28f, cx + ca * s * 0.40f, cy + sa * s * 0.40f, p);
+                }
+                break;
+            case NIGHT:
+                R.set(cx - s * 0.3f, cy - s * 0.3f, cx + s * 0.3f, cy + s * 0.3f);
+                c.drawArc(R, 70, 250, false, p);
+                P.moveTo(cx + s * 0.1f, cy - s * 0.28f);
+                P.quadTo(cx - s * 0.1f, cy + s * 0.06f, cx + s * 0.3f, cy + s * 0.08f);
+                c.drawPath(P, p);
+                break;
+            case CLOUD:
+            case RAIN:
+            case STORM:
+            case SNOW:
+            case PARTLY: {
+                float oy = (icon == CLOUD || icon == PARTLY) ? 0f : -s * 0.12f;
+                if (icon == PARTLY) {
+                    c.drawCircle(cx - s * 0.14f, cy - s * 0.16f, s * 0.13f, p);
+                }
+                P.moveTo(l + s * 0.2f, cy + s * 0.18f + oy);
+                P.lineTo(r - s * 0.2f, cy + s * 0.18f + oy);
+                P.quadTo(r - s * 0.04f, cy + s * 0.18f + oy, r - s * 0.08f, cy + oy);
+                P.quadTo(r - s * 0.14f, cy - s * 0.14f + oy, cx + s * 0.1f, cy - s * 0.08f + oy);
+                P.quadTo(cx - s * 0.02f, cy - s * 0.3f + oy, cx - s * 0.2f, cy - s * 0.08f + oy);
+                P.quadTo(l + s * 0.04f, cy - s * 0.06f + oy, l + s * 0.2f, cy + s * 0.18f + oy);
+                c.drawPath(P, p);
+                float by = cy + s * 0.18f + oy;
+                if (icon == RAIN) {
+                    for (int i = 0; i < 3; i++) {
+                        float x = cx - s * 0.16f + i * s * 0.16f;
+                        c.drawLine(x, by + s * 0.08f, x - s * 0.05f, by + s * 0.2f, p);
+                    }
+                } else if (icon == SNOW) {
+                    for (int i = 0; i < 3; i++) c.drawPoint(cx - s * 0.16f + i * s * 0.16f, by + s * 0.14f, p);
+                } else if (icon == STORM) {
+                    P.reset();
+                    P.moveTo(cx + s * 0.02f, by + s * 0.04f);
+                    P.lineTo(cx - s * 0.08f, by + s * 0.16f);
+                    P.lineTo(cx + s * 0.04f, by + s * 0.16f);
+                    P.lineTo(cx - s * 0.06f, by + s * 0.3f);
+                    c.drawPath(P, p);
+                }
+                break;
+            }
+            case FOG:
+                for (int i = 0; i < 4; i++) {
+                    float y = cy - s * 0.2f + i * s * 0.13f;
+                    c.drawLine(l + s * (i % 2 == 0 ? 0.14f : 0.22f), y, r - s * (i % 2 == 0 ? 0.22f : 0.14f), y, p);
+                }
+                break;
+            case HOURGLASS:
+                c.drawLine(l + s * 0.22f, t + s * 0.14f, r - s * 0.22f, t + s * 0.14f, p);
+                c.drawLine(l + s * 0.22f, b - s * 0.14f, r - s * 0.22f, b - s * 0.14f, p);
+                P.moveTo(l + s * 0.28f, t + s * 0.14f);
+                P.quadTo(l + s * 0.28f, cy - s * 0.04f, cx, cy);
+                P.quadTo(r - s * 0.28f, cy + s * 0.04f, r - s * 0.28f, b - s * 0.14f);
+                P.moveTo(r - s * 0.28f, t + s * 0.14f);
+                P.quadTo(r - s * 0.28f, cy - s * 0.04f, cx, cy);
+                P.quadTo(l + s * 0.28f, cy + s * 0.04f, l + s * 0.28f, b - s * 0.14f);
+                c.drawPath(P, p);
+                break;
+            case TV:
+                R.set(l + s * 0.08f, t + s * 0.22f, r - s * 0.08f, b - s * 0.14f);
+                c.drawRoundRect(R, s * 0.06f, s * 0.06f, p);
+                c.drawLine(cx - s * 0.12f, t + s * 0.08f, cx, t + s * 0.22f, p);
+                c.drawLine(cx + s * 0.12f, t + s * 0.08f, cx, t + s * 0.22f, p);
                 break;
             default:
                 c.drawCircle(cx, cy, s * 0.3f, p);

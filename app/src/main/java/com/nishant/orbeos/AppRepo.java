@@ -62,10 +62,12 @@ final class AppRepo {
     }
 
     static final ExecutorService IO = Executors.newSingleThreadExecutor();
+    /** Network work (weather, series, posters) never blocks local icon decoding. */
+    static final ExecutorService NET = Executors.newFixedThreadPool(2);
     static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     /** Hard cap on decoded artwork; evicted art is re-decoded on demand. */
-    static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(6 * 1024 * 1024) {
+    static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(8 * 1024 * 1024) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return value.getByteCount();
@@ -157,6 +159,47 @@ final class AppRepo {
             // Not a TV with an input framework.
         }
         return out;
+    }
+
+    static void runNetwork(final Runnable r) {
+        NET.execute(new Runnable() {
+            @Override
+            public void run() {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+                r.run();
+            }
+        });
+    }
+
+    /** Downloads a remote image (e.g. a series poster) at exactly tw x th, cached like icons. */
+    static void requestRemote(final String key, final String url, final int tw, final int th, Runnable done) {
+        ArrayList<Runnable> waiting = WAITING.get(key);
+        if (waiting != null) {
+            waiting.add(done);
+            return;
+        }
+        waiting = new ArrayList<>();
+        waiting.add(done);
+        WAITING.put(key, waiting);
+        runNetwork(new Runnable() {
+            @Override
+            public void run() {
+                Bitmap out = null;
+                try {
+                    out = Net.image(url, tw, th);
+                } catch (Throwable ignored) {
+                }
+                final Bitmap result = out;
+                MAIN.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (result != null) CACHE.put(key, result);
+                        ArrayList<Runnable> cbs = WAITING.remove(key);
+                        if (cbs != null) for (Runnable r : cbs) r.run();
+                    }
+                });
+            }
+        });
     }
 
     static Bitmap cached(AppEntry a) {

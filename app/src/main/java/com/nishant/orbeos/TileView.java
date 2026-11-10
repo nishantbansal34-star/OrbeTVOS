@@ -115,6 +115,7 @@ final class TileView extends View {
 
     void bind(final AppRepo.AppEntry a) {
         app = a;
+        remoteKey = null;
         icon = 0;
         setText(a.label, a.label.isEmpty() ? "?" : a.label.substring(0, 1).toUpperCase());
         art = null;
@@ -135,7 +136,35 @@ final class TileView extends View {
         invalidate();
     }
 
+    private String remoteKey, remoteUrl;
+
+    /** A tile whose artwork comes from the internet (series posters). */
+    void bindRemote(final String key, final String url, String title) {
+        app = null;
+        icon = 0;
+        remoteKey = key;
+        remoteUrl = url;
+        setText(title, title == null || title.isEmpty() ? "?" : title.substring(0, 1).toUpperCase());
+        art = null;
+        artPaint.setShader(null);
+        android.graphics.Bitmap b = AppRepo.CACHE.get(key);
+        if (b != null) {
+            setArt(b, true);
+        } else {
+            AppRepo.requestRemote(key, url, tileW, tileH, new Runnable() {
+                @Override
+                public void run() {
+                    if (!key.equals(remoteKey)) return;
+                    android.graphics.Bitmap bb = AppRepo.CACHE.get(key);
+                    if (bb != null) setArt(bb, true);
+                }
+            });
+        }
+        invalidate();
+    }
+
     void bindIcon(String text, int iconId) {
+        remoteKey = null;
         app = null;
         art = null;
         artPaint.setShader(null);
@@ -173,14 +202,16 @@ final class TileView extends View {
     }
 
     void dropArt() {
-        if (app == null) return;
+        if (app == null && remoteKey == null) return;
         art = null;
         artPaint.setShader(null);
         invalidate();
     }
 
     void ensureArt() {
-        if (app != null && art == null) bind(app);
+        if (art != null) return;
+        if (app != null) bind(app);
+        else if (remoteKey != null) bindRemote(remoteKey, remoteUrl, label);
     }
 
     boolean isLook() {

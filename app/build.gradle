@@ -10,8 +10,8 @@ android {
         applicationId 'com.nishant.orbeos'
         minSdk 21
         targetSdk 34
-        versionCode 3
-        versionName '2.1'
+        versionCode 4
+        versionName '2.2'
     }
 
     // Fixed key so every new build installs as an update over the old one.
