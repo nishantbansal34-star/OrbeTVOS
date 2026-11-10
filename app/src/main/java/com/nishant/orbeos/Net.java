@@ -44,6 +44,12 @@ final class Net {
     static Bitmap image(String url, int w, int h) throws IOException {
         byte[] data = bytes(url);
         BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(data, 0, data.length, o);
+        int sample = 1;
+        while (o.outWidth / (sample * 2) >= w && o.outHeight / (sample * 2) >= h) sample *= 2;
+        o = new BitmapFactory.Options();
+        o.inSampleSize = sample;
         o.inPreferredConfig = Bitmap.Config.RGB_565;
         Bitmap src = BitmapFactory.decodeByteArray(data, 0, data.length, o);
         if (src == null) throw new IOException("bad image");

@@ -202,6 +202,57 @@ final class AppRepo {
         });
     }
 
+    /** Full-screen scene images for the top shelf: at most 4 kept (about 1 MB each). */
+    static final LruCache<String, Bitmap> BACKS = new LruCache<>(4);
+    private static final java.util.HashSet<String> NO_BACK = new java.util.HashSet<>();
+
+    /** Finds and downloads a show's background image from TVmaze at 960x540. */
+    static void requestBackdrop(final int showId, Runnable done) {
+        final String key = "bg:" + showId;
+        if (NO_BACK.contains(key)) return;
+        ArrayList<Runnable> waiting = WAITING.get(key);
+        if (waiting != null) {
+            waiting.add(done);
+            return;
+        }
+        waiting = new ArrayList<>();
+        waiting.add(done);
+        WAITING.put(key, waiting);
+        runNetwork(new Runnable() {
+            @Override
+            public void run() {
+                Bitmap out = null;
+                try {
+                    org.json.JSONArray arr = new org.json.JSONArray(
+                            Net.get("https://api.tvmaze.com/shows/" + showId + "/images"));
+                    String url = null;
+                    for (int i = 0; i < arr.length(); i++) {
+                        org.json.JSONObject o = arr.getJSONObject(i);
+                        if (!"background".equals(o.optString("type"))) continue;
+                        org.json.JSONObject res = o.optJSONObject("resolutions");
+                        org.json.JSONObject orig = res == null ? null : res.optJSONObject("original");
+                        if (orig != null) {
+                            url = orig.optString("url").replace("http://", "https://");
+                            break;
+                        }
+                    }
+                    if (url != null && !url.isEmpty()) out = Net.image(url, 960, 540);
+                } catch (Throwable ignored) {
+                }
+                final Bitmap result = out;
+                MAIN.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (result != null) BACKS.put(key, result);
+                        else NO_BACK.add(key);
+                        ArrayList<Runnable> cbs = WAITING.remove(key);
+                        if (cbs != null && result != null) for (Runnable r : cbs) r.run();
+                    }
+                });
+            }
+        });
+    }
+
     static Bitmap cached(AppEntry a) {
         return CACHE.get(a.pkg);
     }

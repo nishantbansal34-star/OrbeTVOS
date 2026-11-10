@@ -346,6 +346,8 @@ public final class MainActivity extends Activity {
                 || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
                 || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
             if (backdrop != null) backdrop.clear();
+            AppRepo.BACKS.evictAll();
+            sharpFor = null;
             forEachTile(root, new TileOp() {
                 @Override
                 public void run(TileView t) {
@@ -954,7 +956,7 @@ public final class MainActivity extends Activity {
         t.artReady = new Runnable() {
             @Override
             public void run() {
-                if (currentPage == PAGE_HOME) backdrop.show(t.art());
+                if (currentPage == PAGE_HOME && sharpFor != t) backdrop.show(t.art());
             }
         };
         t.setOnClickListener(new View.OnClickListener() {
@@ -974,8 +976,14 @@ public final class MainActivity extends Activity {
             @Override
             public void onFocusChange(View v, boolean has) {
                 if (!has) return;
+                sharpFor = null;
                 setHero(kindLabel(a), a.label, "OK to open  ·  Hold OK for options");
                 if (currentPage == PAGE_HOME) backdrop.show(t.art());
+                Series.Show feat = featuredFor(a.pkg);
+                if (feat != null) {
+                    heroLine.setText("New: " + feat.name + "  ·  " + feat.episode + "  ·  OK to open");
+                    loadBackdrop(feat, t);
+                }
                 if (section.equals("apps")) scrollHomeTop();
             }
         });
@@ -1000,6 +1008,7 @@ public final class MainActivity extends Activity {
             @Override
             public void onFocusChange(View v, boolean has) {
                 if (!has) return;
+                sharpFor = null;
                 setHero(heroK, heroT, heroL);
                 if (currentPage == PAGE_HOME) backdrop.show(null);
                 if (v.getParent() == dockRow) scrollHomeTop();
@@ -1017,7 +1026,7 @@ public final class MainActivity extends Activity {
         t.artReady = new Runnable() {
             @Override
             public void run() {
-                if (currentPage == PAGE_HOME) backdrop.show(t.art());
+                if (currentPage == PAGE_HOME && sharpFor != t) backdrop.show(t.art());
             }
         };
         t.setOnFocusChangeListener(new View.OnFocusChangeListener() {
@@ -1027,7 +1036,9 @@ public final class MainActivity extends Activity {
                 String meta = sh.episode + (sh.rating > 0 ? "  ·  ★ " + sh.rating : "")
                         + (app != null ? "  ·  OK to find it" : "  ·  Not on your apps");
                 setHero(where + (sh.genres.isEmpty() ? "" : "  ·  " + sh.genres), sh.name, meta);
+                sharpFor = null;
                 if (currentPage == PAGE_HOME) backdrop.show(t.art());
+                loadBackdrop(sh, t);
             }
         });
         t.setOnClickListener(new View.OnClickListener() {
@@ -1053,6 +1064,37 @@ public final class MainActivity extends Activity {
         String kind = "App".equals(a.kind) ? "" : a.kind;
         if (kind.isEmpty()) return watched;
         return watched.isEmpty() ? kind : kind + "  ·  " + watched;
+    }
+
+    /** The tile whose real scene image is currently on the top shelf. */
+    private View sharpFor;
+
+    private Series.Show featuredFor(String pkg) {
+        for (Series.Show s : series) if (pkg.equals(s.pkg)) return s;
+        return null;
+    }
+
+    private void loadBackdrop(final Series.Show sh, final TileView t) {
+        final String key = "bg:" + sh.id;
+        android.graphics.Bitmap b = AppRepo.BACKS.get(key);
+        if (b != null) {
+            if (currentPage == PAGE_HOME) {
+                backdrop.showSharp(b);
+                sharpFor = t;
+            }
+            return;
+        }
+        AppRepo.requestBackdrop(sh.id, new Runnable() {
+            @Override
+            public void run() {
+                if (!t.isFocused() || currentPage != PAGE_HOME) return;
+                android.graphics.Bitmap bb = AppRepo.BACKS.get(key);
+                if (bb != null) {
+                    backdrop.showSharp(bb);
+                    sharpFor = t;
+                }
+            }
+        });
     }
 
     private String dateShort() {
