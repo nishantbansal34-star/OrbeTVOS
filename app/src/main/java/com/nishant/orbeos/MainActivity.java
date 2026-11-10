@@ -48,6 +48,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -57,10 +58,11 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * ORBÉ OS home. One Activity, everything built in code, pages and panels created
- * lazily and released when the TV needs memory.
+ * ORBÉ OS home, TV-shelf style: a full-screen "top shelf" showing the focused app's
+ * artwork, a glass dock of favourite apps, and optional rows below. One Activity,
+ * built in code; pages and panels are created lazily and released under memory pressure.
  */
-public final class MainActivity extends Activity implements ViewTreeObserver.OnGlobalFocusChangeListener {
+public final class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ constants
 
@@ -74,8 +76,9 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             "com.plexapp.android",
             "com.google.android.youtube.tvmusic",
     };
-    private static final String[] SECTION_IDS = {"apps", "recent", "inputs", "installed", "games", "music"};
-    private static final String[] SECTION_NAMES = {"My Apps", "Recently Opened", "Inputs", "Recently Installed", "Games", "Music"};
+    /** Rows below the dock. (My Apps always lives in the dock.) */
+    private static final String[] SECTION_IDS = {"recent", "inputs", "installed", "games", "music"};
+    private static final String[] SECTION_NAMES = {"Recently Opened", "Inputs", "Recently Installed", "Games", "Music"};
     private static final String DEFAULT_OFF = "installed,games,music";
 
     private static final int PAGE_HOME = 0, PAGE_APPS = 1, PAGE_SEARCH = 2;
@@ -118,7 +121,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
 
     private SharedPreferences prefs;
     private float density;
-    private int padH, gap, tileW, tileH, labelH, iconPx;
+    private int padH, gap, tileW, tileH, labelH, iconPx, shelfH;
 
     private List<AppRepo.AppEntry> apps = new ArrayList<>();
     private List<AppRepo.InputEntry> inputs = new ArrayList<>();
@@ -131,23 +134,21 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     private boolean homeDirty;
     private boolean firstFocusDone;
 
-    // views
     private FrameLayout root;
-    private LinearLayout shell;
-    private LinearLayout navView;
-    private TextView[] tabs;
-    private Theme.Surface[] tabSurfaces;
+    private BackdropView backdrop;
+    private FrameLayout pages;
+    private int currentPage = PAGE_HOME;
     private TextView clock;
     private IconButton netIcon;
     private String netLabel = "Offline";
-    private FrameLayout pages;
-    private int currentPage = PAGE_HOME;
 
     private View pageHome;
-    private TextView heroKind, heroTitle, heroLine;
     private ScrollView homeScroll;
+    private View hero;
+    private TextView heroKind, heroTitle, heroLine;
+    private LinearLayout dockRow;
+    private HorizontalScrollView dockScroll;
     private LinearLayout sectionsBox;
-    private LinearLayout myAppsRow;
     private TileView movingTile;
 
     private View pageApps;
@@ -174,6 +175,8 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     private View overlayReturn;
     private RowView movingSection;
     private LinearLayout sectionList;
+
+    private final SimpleDateFormat dateFmt = new SimpleDateFormat("EEEE d MMMM", Locale.getDefault());
 
     // ------------------------------------------------------------------ receivers
 
@@ -250,7 +253,6 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     @Override
     protected void onStop() {
         super.onStop();
-        // Rebuild "Recently Opened" while the home screen is hidden: no visible jump.
         if (homeDirty) {
             homeDirty = false;
             buildSections();
@@ -267,7 +269,6 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        // Home pressed while already home.
         closeOverlay(false);
         endMove();
         showPage(PAGE_HOME);
@@ -284,8 +285,10 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         } else if (currentPage != PAGE_HOME) {
             showPage(PAGE_HOME);
             focusFirstTile();
+        } else if (homeScroll != null && homeScroll.getScrollY() > 0) {
+            homeScroll.smoothScrollTo(0, 0);
+            focusFirstTile();
         }
-        // On Home, Back does nothing: a launcher never "exits".
     }
 
     @Override
@@ -300,14 +303,12 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             case KeyEvent.KEYCODE_SEARCH:
                 closeOverlay(false);
                 showPage(PAGE_SEARCH);
-                if (searchBox != null) searchBox.requestFocus();
                 return true;
             default:
                 return super.onKeyDown(code, e);
         }
     }
 
-    /** Hand memory back to whatever the user is watching. */
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
@@ -331,6 +332,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
                 || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
                 || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            if (backdrop != null) backdrop.clear();
             forEachTile(root, new TileOp() {
                 @Override
                 public void run(TileView t) {
@@ -450,13 +452,14 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         density = dm.density;
         Theme.screenW = dm.widthPixels;
         Theme.screenH = dm.heightPixels;
-        padH = dp(48);
-        gap = dp(20);
+        padH = dp(56);
+        gap = dp(24);
         int contentW = dm.widthPixels - 2 * padH;
         tileW = (contentW - 4 * gap) / 5;
-        tileH = tileW * 9 / 16;
-        labelH = dp(28);
-        iconPx = Math.round(tileH * 0.56f);
+        tileH = tileW * 3 / 5;              // 5:3 icon cards
+        labelH = dp(30);
+        iconPx = Math.round(tileH * 0.52f);
+        shelfH = Math.round(dm.heightPixels * 0.54f);
     }
 
     private void applyWallpaper() {
@@ -481,8 +484,8 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         final TextView t = text(16, "sans-serif-medium", Typeface.NORMAL, Theme.text);
         t.setText(label);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(20), 0, dp(20), 0);
-        final Theme.Surface s = new Theme.Surface(Theme.ROLE_CARD, dp(22), density);
+        t.setPadding(dp(22), 0, dp(22), 0);
+        final Theme.Surface s = new Theme.Surface(Theme.ROLE_GLASS, dp(22), density);
         t.setBackground(s);
         t.setFocusable(true);
         t.setClickable(true);
@@ -491,6 +494,9 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             @Override
             public void onFocusChange(View v, boolean has) {
                 s.setFocused(has);
+                t.setTextColor(has ? Theme.onFocus : Theme.text);
+                float sc = has ? 1.06f : 1f;
+                t.animate().scaleX(sc).scaleY(sc).setDuration(Theme.dur(160)).start();
             }
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, dp(44));
@@ -527,10 +533,24 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         return false;
     }
 
+    private HorizontalScrollView rowScroller(LinearLayout row) {
+        HorizontalScrollView hsv = new HorizontalScrollView(this);
+        hsv.setHorizontalScrollBarEnabled(false);
+        hsv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        hsv.setSmoothScrollingEnabled(true);
+        hsv.setClipToPadding(false);
+        hsv.setClipChildren(false);
+        // Room for the lifted card + its shadow.
+        hsv.setPadding(padH, dp(16), padH, dp(4));
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
+        hsv.addView(row, new FrameLayout.LayoutParams(WRAP, WRAP));
+        return hsv;
+    }
+
     // ------------------------------------------------------------------ UI shell
 
     private void buildUi() {
-        if (root != null) root.getViewTreeObserver().removeOnGlobalFocusChangeListener(this);
         applyWallpaper();
         overlay = null;
         overlayReturn = null;
@@ -546,84 +566,45 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         firstFocusDone = false;
 
         root = new FrameLayout(this);
-        shell = new LinearLayout(this);
-        shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setPadding(padH, dp(20), padH, 0);
-        shell.setClipChildren(false);
-        shell.setClipToPadding(false);
-        shell.addView(buildNav(), new LinearLayout.LayoutParams(MATCH, WRAP));
+        root.setClipChildren(false);
+        backdrop = new BackdropView(this);
+        root.addView(backdrop, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         pages = new FrameLayout(this);
         pages.setClipChildren(false);
         pageHome = buildHomePage();
         pages.addView(pageHome, new FrameLayout.LayoutParams(MATCH, MATCH));
-        shell.addView(pages, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+        root.addView(pages, new FrameLayout.LayoutParams(MATCH, MATCH));
 
-        root.addView(shell, new FrameLayout.LayoutParams(MATCH, MATCH));
         setContentView(root);
-        root.getViewTreeObserver().addOnGlobalFocusChangeListener(this);
-
         currentPage = PAGE_HOME;
-        updateTabs();
         updateClock();
         updateNet();
         if (favsLoaded) buildSections();
     }
 
-    private View buildNav() {
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setGravity(Gravity.CENTER_VERTICAL);
-        Theme.Surface glass = new Theme.Surface(Theme.ROLE_GLASS, dp(28), density);
-        nav.setBackground(glass);
-        Theme.track(nav, glass);
-        nav.setPadding(dp(8), dp(6), dp(8), dp(6));
+    /** Glass status pill, top-right: search · network · clock · Control Center · settings. */
+    private View buildStatusPill() {
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setBackground(new Theme.Surface(Theme.ROLE_GLASS, dp(28), density));
+        pill.setPadding(dp(6), dp(6), dp(6), dp(6));
 
-        TextView brand = text(20, "sans-serif", Typeface.BOLD, Theme.text);
-        brand.setText("ORBÉ");
-        brand.setLetterSpacing(0.16f);
-        brand.setPadding(dp(14), 0, dp(14), 0);
-        nav.addView(brand);
-
-        String[] names = {"Home", "Apps", "Search"};
-        tabs = new TextView[names.length];
-        tabSurfaces = new Theme.Surface[names.length];
-        for (int i = 0; i < names.length; i++) {
-            final int idx = i;
-            final TextView t = text(17, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
-            t.setText(names[i]);
-            t.setGravity(Gravity.CENTER);
-            t.setPadding(dp(18), 0, dp(18), 0);
-            final Theme.Surface s = new Theme.Surface(Theme.ROLE_NONE, dp(22), density);
-            t.setBackground(s);
-            t.setFocusable(true);
-            t.setClickable(true);
-            t.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                @Override
-                public void onFocusChange(View v, boolean has) {
-                    s.setFocused(has);
-                    updateTabs();
-                }
-            });
-            t.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    showPage(idx);
-                    if (idx == PAGE_SEARCH && searchBox != null) searchBox.requestFocus();
-                }
-            });
-            tabs[i] = t;
-            tabSurfaces[i] = s;
-            nav.addView(t, new LinearLayout.LayoutParams(WRAP, dp(44)));
-        }
-
-        nav.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        IconButton search = new IconButton(this, Icons.SEARCH, "Search", density, true);
+        search.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showPage(PAGE_SEARCH);
+            }
+        });
+        pill.addView(search);
 
         netIcon = new IconButton(this, Icons.WIFI, "Network", density, false);
-        nav.addView(netIcon);
-        clock = text(18, "sans-serif-medium", Typeface.NORMAL, Theme.text);
-        clock.setPadding(dp(4), 0, dp(14), 0);
-        nav.addView(clock);
+        pill.addView(netIcon);
+        clock = text(19, "sans-serif-medium", Typeface.NORMAL, Theme.text);
+        clock.setPadding(0, 0, dp(10), 0);
+        pill.addView(clock);
 
         IconButton cc = new IconButton(this, Icons.SLIDERS, "Control Center", density, true);
         cc.setOnClickListener(new View.OnClickListener() {
@@ -632,7 +613,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
                 openControlCenter();
             }
         });
-        nav.addView(cc);
+        pill.addView(cc);
         IconButton gear = new IconButton(this, Icons.GEAR, "ORBÉ settings", density, true);
         gear.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -642,43 +623,8 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         });
         LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(WRAP, WRAP);
         glp.leftMargin = dp(4);
-        nav.addView(gear, glp);
-
-        navView = nav;
-        return nav;
-    }
-
-    private void updateTabs() {
-        if (tabs == null) return;
-        for (int i = 0; i < tabs.length; i++) {
-            boolean on = i == currentPage || tabs[i].isFocused();
-            tabs[i].setTextColor(on ? Theme.text : Theme.text2);
-            tabSurfaces[i].setSelected(i == currentPage);
-        }
-    }
-
-    private int tabIndex(View v) {
-        if (tabs == null) return -1;
-        for (int i = 0; i < tabs.length; i++) if (tabs[i] == v) return i;
-        return -1;
-    }
-
-    /**
-     * Tabs switch pages when you move along the nav bar, but arriving at the nav bar
-     * from below always lands on the current tab, so pressing Up never changes page.
-     */
-    @Override
-    public void onGlobalFocusChanged(View old, View now) {
-        int ti = tabIndex(now);
-        if (ti >= 0) {
-            if (old != null && isInside(old, navView)) {
-                showPage(ti);
-            } else if (ti != currentPage) {
-                tabs[currentPage].requestFocus();
-                return;
-            }
-        }
-        updateTabs();
+        pill.addView(gear, glp);
+        return pill;
     }
 
     private void showPage(int i) {
@@ -702,11 +648,13 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         currentPage = i;
         View[] all = {pageHome, pageApps, pageSearch};
         for (View p : all) if (p != null) p.setVisibility(p == target ? View.VISIBLE : View.GONE);
-        if (changed && Theme.dur(150) > 0) {
+        if (i != PAGE_HOME) backdrop.show(null);
+        if (changed && Theme.dur(160) > 0) {
             target.setAlpha(0f);
-            target.animate().alpha(1f).setDuration(Theme.dur(150)).start();
+            target.animate().alpha(1f).setDuration(Theme.dur(160)).start();
         }
-        updateTabs();
+        if (i == PAGE_APPS && grid != null) grid.requestFocus();
+        if (i == PAGE_SEARCH && searchBox != null) searchBox.requestFocus();
     }
 
     private void updateClock() {
@@ -739,39 +687,75 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     // ------------------------------------------------------------------ home page
 
     private View buildHomePage() {
-        LinearLayout home = new LinearLayout(this);
-        home.setOrientation(LinearLayout.VERTICAL);
-        home.setClipChildren(false);
-
-        // Hero: fixed sizes, so changing it only redraws text and never re-measures the screen.
-        LinearLayout hero = new LinearLayout(this);
-        hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(6), dp(8), 0, 0);
-        heroKind = text(14, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
-        heroKind.setAllCaps(true);
-        heroKind.setLetterSpacing(0.18f);
-        heroTitle = text(46, "sans-serif", Typeface.BOLD, Theme.text);
-        heroLine = text(16, "sans-serif", Typeface.NORMAL, Theme.text2);
-        hero.addView(heroKind, new LinearLayout.LayoutParams(MATCH, dp(22)));
-        hero.addView(heroTitle, new LinearLayout.LayoutParams(MATCH, dp(62)));
-        hero.addView(heroLine, new LinearLayout.LayoutParams(MATCH, dp(24)));
-        home.addView(hero, new LinearLayout.LayoutParams(MATCH, dp(136)));
-
         homeScroll = new ScrollView(this);
         homeScroll.setVerticalScrollBarEnabled(false);
         homeScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         homeScroll.setSmoothScrollingEnabled(true);
-        homeScroll.setClipToPadding(false);
-        homeScroll.setPadding(0, 0, 0, dp(32));
+        homeScroll.setClipChildren(false);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setClipChildren(false);
+        col.setPadding(0, 0, 0, dp(48));
+
+        // Top shelf: artwork shows through from the backdrop behind.
+        FrameLayout shelf = new FrameLayout(this);
+        shelf.setClipChildren(false);
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP | Gravity.END);
+        plp.setMargins(0, dp(28), padH, 0);
+        shelf.addView(buildStatusPill(), plp);
+
+        LinearLayout heroBox = new LinearLayout(this);
+        heroBox.setOrientation(LinearLayout.VERTICAL);
+        heroKind = text(15, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
+        heroKind.setAllCaps(true);
+        heroKind.setLetterSpacing(0.2f);
+        heroTitle = text(56, "sans-serif", Typeface.BOLD, Theme.text);
+        heroTitle.setShadowLayer(dp(12), 0, dp(2), 0x66000000);
+        heroLine = text(17, "sans-serif", Typeface.NORMAL, Theme.text2);
+        heroBox.addView(heroKind, new LinearLayout.LayoutParams(dp(720), dp(24)));
+        heroBox.addView(heroTitle, new LinearLayout.LayoutParams(dp(720), dp(76)));
+        heroBox.addView(heroLine, new LinearLayout.LayoutParams(dp(720), dp(26)));
+        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM | Gravity.START);
+        hlp.setMargins(padH, 0, 0, dp(22));
+        shelf.addView(heroBox, hlp);
+        hero = heroBox;
+        col.addView(shelf, new LinearLayout.LayoutParams(MATCH, shelfH));
+
+        // Glass dock with My Apps.
+        FrameLayout dock = new FrameLayout(this);
+        dock.setClipChildren(false);
+        View glass = new View(this);
+        glass.setBackground(new Theme.Surface(Theme.ROLE_GLASS, dp(32), density));
+        FrameLayout.LayoutParams gl = new FrameLayout.LayoutParams(MATCH, MATCH);
+        gl.setMargins(padH - dp(20), dp(6), padH - dp(20), 0);
+        dock.addView(glass, gl);
+        dockRow = new LinearLayout(this);
+        dockScroll = rowScroller(dockRow);
+        dockScroll.setPadding(padH, dp(22), padH, dp(2));
+        dock.addView(dockScroll, new FrameLayout.LayoutParams(MATCH, WRAP));
+        col.addView(dock, new LinearLayout.LayoutParams(MATCH, WRAP));
+
         sectionsBox = new LinearLayout(this);
         sectionsBox.setOrientation(LinearLayout.VERTICAL);
         sectionsBox.setClipChildren(false);
-        homeScroll.addView(sectionsBox, new FrameLayout.LayoutParams(MATCH, WRAP));
-        home.addView(homeScroll, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+        col.addView(sectionsBox, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        homeScroll.addView(col, new FrameLayout.LayoutParams(MATCH, WRAP));
+
+        // Scrolling into the rows fades the shelf out, like a TV top shelf.
+        homeScroll.getViewTreeObserver().addOnScrollChangedListener(new ViewTreeObserver.OnScrollChangedListener() {
+            @Override
+            public void onScrollChanged() {
+                if (homeScroll == null) return;
+                float t = Math.min(1f, homeScroll.getScrollY() / (float) Math.max(1, shelfH));
+                backdrop.setAlpha(1f - 0.75f * t);
+                hero.setAlpha(1f - t);
+            }
+        });
 
         setHero("Welcome", "ORBÉ OS", "Entertainment, without the clutter.");
-        return home;
+        return homeScroll;
     }
 
     private void setHero(String kind, String title, String line) {
@@ -779,10 +763,11 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         heroKind.setText(kind);
         heroTitle.setText(title);
         heroLine.setText(line);
-        int d = Theme.dur(160);
+        int d = Theme.dur(200);
         if (d > 0) {
-            heroTitle.setAlpha(0.4f);
-            heroTitle.animate().alpha(1f).setDuration(d).start();
+            heroTitle.setAlpha(0.3f);
+            heroTitle.setTranslationY(dp(6));
+            heroTitle.animate().alpha(1f).translationY(0f).setDuration(d).setInterpolator(TileView.EASE).start();
         }
     }
 
@@ -795,26 +780,36 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         if (sectionsBox == null || !favsLoaded) return;
         View f = getCurrentFocus();
         String focusTag = f != null && f.getTag() instanceof String ? (String) f.getTag() : null;
-        boolean focusWasHere = f != null && isInside(f, sectionsBox);
+        boolean focusWasHere = f != null && (isInside(f, sectionsBox) || isInside(f, dockRow));
 
         endMove();
+        dockRow.removeAllViews();
+        for (String pkg : favs) {
+            AppRepo.AppEntry a = find(pkg);
+            if (a != null && !hidden.contains(pkg)) dockRow.addView(appTile(a, "apps"), tileParams());
+        }
+        dockRow.addView(iconTile("All Apps", Icons.GRID, "apps:+", "Library", "All Apps",
+                "Every app on this TV  ·  Hold OK on any app to pin it here", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        showPage(PAGE_APPS);
+                    }
+                }), tileParams());
+
         sectionsBox.removeAllViews();
-        myAppsRow = null;
         for (String id : sectionOrder) {
             if (sectionOff.contains(id)) continue;
             List<View> tiles = tilesFor(id);
             if (tiles.isEmpty()) continue;
-            LinearLayout row = addSection(sectionsBox, sectionName(id), tiles);
-            if (id.equals("apps")) myAppsRow = row;
-        }
-        if (sectionsBox.getChildCount() == 0) {
-            TextView empty = text(18, "sans-serif", Typeface.NORMAL, Theme.text2);
-            empty.setText("All sections are turned off. Turn them on in ORBÉ settings.");
-            sectionsBox.addView(empty);
+            addSection(sectionsBox, sectionName(id), tiles);
         }
 
         if (overlay != null || currentPage != PAGE_HOME) return;
-        View back = focusTag != null ? sectionsBox.findViewWithTag(focusTag) : null;
+        View back = null;
+        if (focusTag != null) {
+            back = dockRow.findViewWithTag(focusTag);
+            if (back == null) back = sectionsBox.findViewWithTag(focusTag);
+        }
         if (back != null) {
             back.requestFocus();
         } else if (focusWasHere || !firstFocusDone || getCurrentFocus() == null) {
@@ -824,46 +819,20 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     }
 
     private LinearLayout addSection(LinearLayout box, String title, List<View> tiles) {
-        TextView t = text(17, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
+        TextView t = text(18, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
         t.setText(title);
-        t.setPadding(dp(6), dp(10), 0, dp(2));
+        t.setPadding(padH, dp(18), 0, 0);
         box.addView(t, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
-        hsv.setHorizontalScrollBarEnabled(false);
-        hsv.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        hsv.setSmoothScrollingEnabled(true);
-        hsv.setClipToPadding(false);
-        hsv.setPadding(dp(10), dp(10), dp(10), dp(6));
         LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setClipChildren(false);
+        HorizontalScrollView hsv = rowScroller(row);
         for (View v : tiles) row.addView(v, tileParams());
-        hsv.addView(row, new FrameLayout.LayoutParams(WRAP, WRAP));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        lp.leftMargin = -dp(10);
-        lp.rightMargin = -dp(10);
-        box.addView(hsv, lp);
+        box.addView(hsv, new LinearLayout.LayoutParams(MATCH, WRAP));
         return row;
     }
 
     private List<View> tilesFor(String id) {
         ArrayList<View> out = new ArrayList<>();
         switch (id) {
-            case "apps":
-                for (String pkg : favs) {
-                    AppRepo.AppEntry a = find(pkg);
-                    if (a != null && !hidden.contains(pkg)) out.add(appTile(a, "apps"));
-                }
-                out.add(iconTile("Add apps", Icons.PLUS, "apps:+", "Library", "Add apps",
-                        "Pin any app from the Apps tab", new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                showPage(PAGE_APPS);
-                                if (grid != null) grid.requestFocus();
-                            }
-                        }));
-                break;
             case "recent": {
                 int n = 0;
                 for (String pkg : recents) {
@@ -915,6 +884,12 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         final TileView t = newTile(true);
         t.bind(a);
         t.setTag(section + ":" + a.pkg);
+        t.artReady = new Runnable() {
+            @Override
+            public void run() {
+                if (currentPage == PAGE_HOME) backdrop.show(t.art());
+            }
+        };
         t.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -931,7 +906,9 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         t.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean has) {
-                if (has) setHero(a.kind, a.label, "OK to open  ·  Hold OK for options");
+                if (!has) return;
+                setHero(a.kind, a.label, "OK to open  ·  Hold OK for options");
+                if (currentPage == PAGE_HOME) backdrop.show(t.art());
             }
         });
         if (section.equals("apps")) {
@@ -954,25 +931,18 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         t.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean has) {
-                if (has) setHero(heroK, heroT, heroL);
+                if (!has) return;
+                setHero(heroK, heroT, heroL);
+                if (currentPage == PAGE_HOME) backdrop.show(null);
             }
         });
         return t;
     }
 
     private void focusFirstTile() {
-        if (sectionsBox == null) return;
-        for (int i = 0; i < sectionsBox.getChildCount(); i++) {
-            View c = sectionsBox.getChildAt(i);
-            if (c instanceof HorizontalScrollView) {
-                ((HorizontalScrollView) c).scrollTo(0, 0);
-                ViewGroup row = (ViewGroup) ((HorizontalScrollView) c).getChildAt(0);
-                if (row != null && row.getChildCount() > 0) {
-                    row.getChildAt(0).requestFocus();
-                    return;
-                }
-            }
-        }
+        if (dockRow == null || dockRow.getChildCount() == 0) return;
+        dockScroll.scrollTo(0, 0);
+        dockRow.getChildAt(0).requestFocus();
     }
 
     // ------------------------------------------------------------------ rearranging My Apps
@@ -988,33 +958,33 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         if (movingTile == null) return;
         movingTile.setMoving(false);
         movingTile = null;
-        if (myAppsRow == null) return;
+        if (dockRow == null) return;
         ArrayList<String> order = new ArrayList<>();
-        for (int i = 0; i < myAppsRow.getChildCount(); i++) {
-            View v = myAppsRow.getChildAt(i);
+        for (int i = 0; i < dockRow.getChildCount(); i++) {
+            View v = dockRow.getChildAt(i);
             if (v instanceof TileView && ((TileView) v).app != null) order.add(((TileView) v).app.pkg);
         }
-        for (String p : favs) if (!order.contains(p)) order.add(p);   // keep hidden pins
+        for (String p : favs) if (!order.contains(p)) order.add(p);
         favs.clear();
         favs.addAll(order);
         putList("fav", favs);
     }
 
     private boolean onMoveKey(TileView t, int code, KeyEvent e) {
-        if (movingTile != t || myAppsRow == null) return false;
+        if (movingTile != t || dockRow == null) return false;
         if (e.getAction() != KeyEvent.ACTION_DOWN) return true;
         boolean ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
                 || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
-        if (ok && e.getRepeatCount() > 0) return true;   // still holding from the long-press
-        int i = myAppsRow.indexOfChild(t);
-        int lastApp = myAppsRow.getChildCount() - 2;     // last child is "Add apps"
+        if (ok && e.getRepeatCount() > 0) return true;
+        int i = dockRow.indexOfChild(t);
+        int lastApp = dockRow.getChildCount() - 2;     // last child is "All Apps"
         if (code == KeyEvent.KEYCODE_DPAD_LEFT && i > 0) {
-            swapChild(myAppsRow, i, i - 1);
+            swapChild(dockRow, i, i - 1);
         } else if (code == KeyEvent.KEYCODE_DPAD_RIGHT && i < lastApp) {
-            swapChild(myAppsRow, i, i + 1);
+            swapChild(dockRow, i, i + 1);
         } else if (ok || code == KeyEvent.KEYCODE_BACK) {
             endMove();
-            setHero(t.app != null ? t.app.kind : "", t.app != null ? t.app.label : "", "OK to open  ·  Hold OK for options");
+            if (t.app != null) setHero(t.app.kind, t.app.label, "OK to open  ·  Hold OK for options");
         }
         return true;
     }
@@ -1032,16 +1002,16 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     private View buildAppsPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(0, dp(24), 0, 0);
+        page.setPadding(0, dp(40), 0, 0);
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(6), 0, 0, 0);
-        TextView title = text(34, "sans-serif", Typeface.BOLD, Theme.text);
+        header.setPadding(padH, 0, padH, 0);
+        TextView title = text(40, "sans-serif", Typeface.BOLD, Theme.text);
         title.setText("Apps");
         appsCount = text(16, "sans-serif", Typeface.NORMAL, Theme.text2);
-        appsCount.setPadding(dp(14), dp(8), 0, 0);
+        appsCount.setPadding(dp(16), dp(10), 0, 0);
         header.addView(title);
         header.addView(appsCount);
         header.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
@@ -1071,9 +1041,10 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         grid.setColumnWidth(tileW);
         grid.setStretchMode(GridView.NO_STRETCH);
         grid.setHorizontalSpacing(gap);
-        grid.setVerticalSpacing(dp(14));
-        grid.setPadding(dp(10), dp(20), dp(10), dp(40));
+        grid.setVerticalSpacing(dp(10));
+        grid.setPadding(padH, dp(28), padH, dp(48));
         grid.setClipToPadding(false);
+        grid.setClipChildren(false);
         grid.setSelector(new ColorDrawable(0));
         grid.setDrawSelectorOnTop(false);
         grid.setVerticalScrollBarEnabled(false);
@@ -1114,10 +1085,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
                 return true;
             }
         });
-        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(MATCH, 0, 1f);
-        glp.leftMargin = -dp(10);
-        glp.rightMargin = -dp(10);
-        page.addView(grid, glp);
+        page.addView(grid, new LinearLayout.LayoutParams(MATCH, 0, 1f));
 
         refreshAppsView();
         return page;
@@ -1184,23 +1152,29 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     private View buildSearchPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(0, dp(24), 0, 0);
+        page.setPadding(padH, dp(40), padH, 0);
         page.setClipChildren(false);
 
+        TextView title = text(40, "sans-serif", Typeface.BOLD, Theme.text);
+        title.setText("Search");
+        title.setPadding(0, 0, 0, dp(20));
+        page.addView(title);
+
         searchBox = new EditText(this);
-        final Theme.Surface s = new Theme.Surface(Theme.ROLE_CARD, dp(26), density);
+        final Theme.Surface s = new Theme.Surface(Theme.ROLE_GLASS, dp(28), density);
         searchBox.setBackground(s);
         searchBox.setTextColor(Theme.text);
         searchBox.setHintTextColor(Theme.text2);
-        searchBox.setHint("Search apps and settings");
+        searchBox.setHint("Apps, settings, films and shows");
         searchBox.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
         searchBox.setSingleLine(true);
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        searchBox.setPadding(dp(24), 0, dp(24), 0);
+        searchBox.setPadding(dp(26), 0, dp(26), 0);
         searchBox.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean has) {
                 s.setFocused(has);
+                searchBox.setTextColor(has ? Theme.onFocus : Theme.text);
             }
         });
         searchBox.addTextChangedListener(new TextWatcher() {
@@ -1229,13 +1203,16 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         sv.setVerticalScrollBarEnabled(false);
         sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         sv.setClipToPadding(false);
+        sv.setClipChildren(false);
         sv.setPadding(0, dp(8), 0, dp(32));
         resultsBox = new LinearLayout(this);
         resultsBox.setOrientation(LinearLayout.VERTICAL);
         resultsBox.setClipChildren(false);
-        resultsBox.setFocusable(false);
         sv.addView(resultsBox, new FrameLayout.LayoutParams(MATCH, WRAP));
-        page.addView(sv, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+        LinearLayout.LayoutParams svlp = new LinearLayout.LayoutParams(MATCH, 0, 1f);
+        svlp.leftMargin = -padH;
+        svlp.rightMargin = -padH;
+        page.addView(sv, svlp);
         runSearch();
         return page;
     }
@@ -1249,7 +1226,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             TextView hint = text(17, "sans-serif", Typeface.NORMAL, Theme.text2);
             hint.setSingleLine(false);
             hint.setText("Find any installed app or setting. Results appear as you type.");
-            hint.setPadding(dp(6), dp(20), 0, 0);
+            hint.setPadding(padH, dp(20), padH, 0);
             resultsBox.addView(hint);
             return;
         }
@@ -1269,29 +1246,32 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             addSection(resultsBox, "Apps", tiles);
         }
 
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(padH - dp(16), 0, padH - dp(16), 0);
         boolean header = false;
         for (final Shortcut sc : SHORTCUTS) {
             if (!sc.label.toLowerCase(Locale.getDefault()).contains(q)) continue;
             if (!header) {
-                resultsBox.addView(label("Settings"));
+                list.addView(label("Settings"));
                 header = true;
             }
-            resultsBox.addView(row(sc.icon, sc.label, null, new View.OnClickListener() {
+            list.addView(row(sc.icon, sc.label, null, new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     openSetting(sc.action);
                 }
             }));
         }
-
-        resultsBox.addView(label("Movies & shows"));
-        resultsBox.addView(row(Icons.SEARCH, "Search “" + raw + "” in your streaming apps", null,
+        list.addView(label("Films & shows"));
+        list.addView(row(Icons.SEARCH, "Search “" + raw + "” in your streaming apps", null,
                 new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
                         systemSearch(raw);
                     }
                 }));
+        resultsBox.addView(list, new LinearLayout.LayoutParams(MATCH, WRAP));
     }
 
     // ------------------------------------------------------------------ overlays
@@ -1299,14 +1279,12 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     private LinearLayout panel(int role, int width, boolean right) {
         LinearLayout p = new LinearLayout(this);
         p.setOrientation(LinearLayout.VERTICAL);
-        Theme.Surface s = new Theme.Surface(role, dp(20), density);
-        p.setBackground(s);
-        if (role == Theme.ROLE_GLASS) Theme.track(p, s);
-        p.setPadding(dp(14), dp(20), dp(14), dp(14));
+        p.setBackground(new Theme.Surface(role, dp(30), density));
+        p.setPadding(dp(18), dp(24), dp(18), dp(18));
         FrameLayout.LayoutParams lp;
         if (right) {
             lp = new FrameLayout.LayoutParams(width, MATCH, Gravity.END);
-            lp.setMargins(dp(20), dp(20), dp(20), dp(20));
+            lp.setMargins(dp(24), dp(24), dp(24), dp(24));
         } else {
             lp = new FrameLayout.LayoutParams(width, WRAP, Gravity.CENTER);
         }
@@ -1319,7 +1297,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         t.setAllCaps(true);
         t.setLetterSpacing(0.14f);
         t.setText(s);
-        t.setPadding(dp(16), dp(16), 0, dp(6));
+        t.setPadding(dp(16), dp(18), 0, dp(6));
         return t;
     }
 
@@ -1353,11 +1331,16 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         root.addView(layer, new FrameLayout.LayoutParams(MATCH, MATCH));
         overlay = layer;
         overlayReturn = returnFocus;
-        shell.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);   // trap focus in the panel
-        int d = Theme.dur(150);
+        pages.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        int d = Theme.dur(180);
         if (d > 0) {
             layer.setAlpha(0f);
             layer.animate().alpha(1f).setDuration(d).start();
+            content.setTranslationX(content.getLayoutParams() instanceof FrameLayout.LayoutParams
+                    && ((FrameLayout.LayoutParams) content.getLayoutParams()).gravity == Gravity.END ? dp(40) : 0);
+            content.setScaleX(0.97f);
+            content.setScaleY(0.97f);
+            content.animate().translationX(0f).scaleX(1f).scaleY(1f).setDuration(d).setInterpolator(TileView.EASE).start();
         }
         if (firstFocus != null) firstFocus.requestFocus();
     }
@@ -1368,7 +1351,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         overlay = null;
         movingSection = null;
         sectionList = null;
-        shell.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        pages.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         View back = overlayReturn;
         overlayReturn = null;
         if (restoreFocus) {
@@ -1377,10 +1360,9 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         }
     }
 
-    // App actions (Hold OK on any app)
     private void openAppMenu(final AppRepo.AppEntry a, final View origin, final boolean inMyApps) {
         LinearLayout p = panel(Theme.ROLE_ELEVATED, dp(440), false);
-        TextView title = text(24, "sans-serif", Typeface.BOLD, Theme.text);
+        TextView title = text(26, "sans-serif", Typeface.BOLD, Theme.text);
         title.setText(a.label);
         title.setPadding(dp(16), 0, dp(16), dp(4));
         TextView sub = text(14, "sans-serif", Typeface.NORMAL, Theme.text2);
@@ -1442,17 +1424,44 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         showOverlay(p, origin, open);
     }
 
+    private PadView pad(int icon, String label, String state, View.OnClickListener click) {
+        PadView p = new PadView(this, icon, label, state, density);
+        p.setOnClickListener(click);
+        return p;
+    }
+
+    private void addPadRow(LinearLayout list, PadView left, PadView right) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        l.rightMargin = dp(6);
+        r.addView(left, l);
+        LinearLayout.LayoutParams rr = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        rr.leftMargin = dp(6);
+        if (right != null) r.addView(right, rr);
+        else r.addView(new View(this), rr);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        lp.topMargin = dp(12);
+        list.addView(r, lp);
+    }
+
     private void openControlCenter() {
+        View ret = overlayReturn != null ? overlayReturn : getCurrentFocus();
         LinearLayout p = panel(Theme.ROLE_GLASS, dp(420), true);
-        TextView title = text(26, "sans-serif", Typeface.BOLD, Theme.text);
-        title.setText("Control Center");
-        title.setPadding(dp(16), 0, 0, dp(6));
-        p.addView(title);
+
+        TextView time = text(44, "sans-serif-light", Typeface.NORMAL, Theme.text);
+        time.setText(DateFormat.getTimeFormat(this).format(new Date()));
+        time.setPadding(dp(8), 0, 0, 0);
+        TextView date = text(15, "sans-serif-medium", Typeface.NORMAL, Theme.text2);
+        date.setText(dateFmt.format(new Date()));
+        date.setPadding(dp(8), dp(4), 0, dp(4));
+        p.addView(time);
+        p.addView(date);
 
         LinearLayout list = new LinearLayout(this);
         final AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         final RowView vol = row(Icons.SOUND, "Volume", null, null);
-        final RowView mute = row(Icons.MUTE, "Mute", null, null);
+        final PadView mute = pad(Icons.MUTE, "Mute", "Off", null);
         updateVolume(vol, mute, am);
         vol.setOnKeyListener(new View.OnKeyListener() {
             @Override
@@ -1480,14 +1489,19 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
                 updateVolume(vol, mute, am);
             }
         });
-        list.addView(vol);
-        list.addView(mute);
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        vlp.topMargin = dp(10);
+        list.addView(vol, vlp);
 
-        list.addView(label("Connections"));
-        list.addView(row(netLabel.equals("Ethernet") ? Icons.ETHERNET : netLabel.equals("Offline") ? Icons.OFFLINE : Icons.WIFI,
-                "Network", netLabel, settingClick(Settings.ACTION_WIFI_SETTINGS)));
-        list.addView(row(Icons.BLUETOOTH, "Bluetooth & remotes", null, settingClick(Settings.ACTION_BLUETOOTH_SETTINGS)));
-        list.addView(row(Icons.CAST, "Screen mirroring", null, settingClick(Settings.ACTION_CAST_SETTINGS)));
+        int netIc = netLabel.equals("Ethernet") ? Icons.ETHERNET : netLabel.equals("Offline") ? Icons.OFFLINE : Icons.WIFI;
+        PadView net = pad(netIc, "Network", netLabel, settingClick(Settings.ACTION_WIFI_SETTINGS));
+        net.setState(netLabel, !netLabel.equals("Offline"));
+        addPadRow(list, net, pad(Icons.BLUETOOTH, "Bluetooth", "Remotes & audio", settingClick(Settings.ACTION_BLUETOOTH_SETTINGS)));
+        addPadRow(list, mute, pad(Icons.CAST, "Mirroring", "Cast to TV", settingClick(Settings.ACTION_CAST_SETTINGS)));
+        addPadRow(list, pad(Icons.DISPLAY, "Picture", "Display settings", settingClick(Settings.ACTION_DISPLAY_SETTINGS)),
+                pad(Icons.SOUND, "Sound", "Audio output", settingClick(Settings.ACTION_SOUND_SETTINGS)));
+        addPadRow(list, pad(Icons.MOON, "Screensaver", "When idle", settingClick(Settings.ACTION_DREAM_SETTINGS)),
+                pad(Icons.ACCESS, "Accessibility", "Shortcuts", settingClick(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
         if (!inputs.isEmpty()) {
             list.addView(label("Inputs"));
@@ -1502,13 +1516,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             }
         }
 
-        list.addView(label("Picture & sound"));
-        list.addView(row(Icons.DISPLAY, "Display & picture", null, settingClick(Settings.ACTION_DISPLAY_SETTINGS)));
-        list.addView(row(Icons.SOUND, "Sound", null, settingClick(Settings.ACTION_SOUND_SETTINGS)));
-        list.addView(row(Icons.MOON, "Screensaver", null, settingClick(Settings.ACTION_DREAM_SETTINGS)));
-
         list.addView(label("More"));
-        list.addView(row(Icons.ACCESS, "Accessibility", null, settingClick(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         list.addView(row(Icons.SHIELD, "Privacy", null, settingClick(Settings.ACTION_PRIVACY_SETTINGS)));
         list.addView(row(Icons.GEAR, "All system settings", null, settingClick(Settings.ACTION_SETTINGS)));
         list.addView(row(Icons.LAYERS, "ORBÉ settings", null, new View.OnClickListener() {
@@ -1519,11 +1527,10 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         }));
 
         p.addView(scrollList(list));
-        View ret = overlayReturn != null ? overlayReturn : getCurrentFocus();
         showOverlay(p, ret, vol);
     }
 
-    private void updateVolume(RowView vol, RowView mute, AudioManager am) {
+    private void updateVolume(RowView vol, PadView mute, AudioManager am) {
         if (am == null) {
             vol.setValue("Unavailable");
             return;
@@ -1532,10 +1539,8 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         int cur = am.getStreamVolume(AudioManager.STREAM_MUSIC);
         boolean muted = Build.VERSION.SDK_INT >= 23 ? am.isStreamMute(AudioManager.STREAM_MUSIC) : cur == 0;
         vol.setLevel(cur / (float) max);
-        vol.setValue(cur + " / " + max + "  ◀ ▶");
-        mute.setValue(muted ? "On" : "Off");
-        mute.accentValue = muted;
-        mute.invalidate();
+        vol.setValue(cur + "  ◀ ▶");
+        mute.setState(muted ? "On" : "Off", muted);
     }
 
     private View.OnClickListener settingClick(final String action) {
@@ -1551,12 +1556,12 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
     private void openOrbeSettings() {
         View ret = overlayReturn != null ? overlayReturn : getCurrentFocus();
         LinearLayout p = panel(Theme.ROLE_GLASS, dp(460), true);
-        TextView title = text(26, "sans-serif", Typeface.BOLD, Theme.text);
+        TextView title = text(28, "sans-serif", Typeface.BOLD, Theme.text);
         title.setText("ORBÉ Settings");
         title.setPadding(dp(16), 0, 0, dp(2));
         TextView sub = text(14, "sans-serif", Typeface.NORMAL, Theme.text2);
         sub.setText("Your TV. Your World. Your Rules.");
-        sub.setPadding(dp(16), 0, 0, dp(6));
+        sub.setPadding(dp(16), dp(2), 0, dp(6));
         p.addView(title);
         p.addView(sub);
 
@@ -1586,7 +1591,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
         });
         list.addView(motion);
 
-        list.addView(label("Home sections  ·  OK show/hide  ·  Hold OK reorder"));
+        list.addView(label("Rows below the dock  ·  OK show/hide  ·  Hold OK reorder"));
         sectionList = new LinearLayout(this);
         sectionList.setOrientation(LinearLayout.VERTICAL);
         for (final String id : sectionOrder) {
@@ -1633,7 +1638,6 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
                 showPage(PAGE_APPS);
                 if (hiddenPill != null) hiddenPill.setText("Hide hidden apps");
                 refreshAppsView();
-                if (grid != null) grid.requestFocus();
             }
         }));
         list.addView(row(Icons.STAR, "Reset My Apps to default", null, new View.OnClickListener() {
@@ -1722,7 +1726,7 @@ public final class MainActivity extends Activity implements ViewTreeObserver.OnG
             msg = a.label + " is visible again";
         } else {
             hidden.add(a.pkg);
-            msg = a.label + " hidden. Find it under Apps → Show hidden apps";
+            msg = a.label + " hidden. Find it under All Apps → Show hidden apps";
         }
         putList("hidden", hidden);
         buildSections();

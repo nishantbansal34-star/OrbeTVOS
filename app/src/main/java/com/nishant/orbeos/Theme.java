@@ -1,10 +1,9 @@
 package com.nishant.orbeos;
 
 import android.graphics.Bitmap;
-import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
-import android.graphics.Matrix;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RadialGradient;
@@ -12,17 +11,21 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
-import android.view.View;
 
-/** ORBÉ design tokens + the two surface types (solid card, sparing glass). */
+/**
+ * ORBÉ design tokens + surfaces.
+ *
+ * Liquid glass, cheaply: everything behind the glass (the top-shelf backdrop) is
+ * already a pre-blurred image, so a glass surface only needs a translucent fill,
+ * an inner sheen and a specular rim. No live blur on any frame.
+ */
 final class Theme {
     static boolean light;
     static boolean reduceMotion;
 
-    static int bg, bg2, card, elevated, text, text2, accent, accent2, ring, hairline, scrim;
+    static int bg, bg2, card, elevated, text, text2, accent, accent2, ring, hairline, scrim, onFocus;
 
-    static Bitmap wallpaper;   // 480x270, rendered once
-    static Bitmap frosted;     // 120x68 pre-blurred copy for glass surfaces
+    static Bitmap wallpaper;
     static int screenW = 1920, screenH = 1080;
 
     static final int ROLE_CARD = 0, ROLE_ELEVATED = 1, ROLE_GLASS = 2, ROLE_NONE = 3;
@@ -34,11 +37,11 @@ final class Theme {
         if (isLight) {
             bg = 0xFFF3F4F7; bg2 = 0xFFE8EAF0; card = 0xFFFFFFFF; elevated = 0xFFFFFFFF;
             text = 0xFF0E1015; text2 = 0xFF555C6A; accent = 0xFF6A4FF0; accent2 = 0xFF3D6FE8;
-            ring = 0xFF0E1015; hairline = 0x1A0E1015; scrim = 0x660E1015;
+            ring = 0xFF0E1015; hairline = 0x1A0E1015; scrim = 0x660E1015; onFocus = 0xFFFFFFFF;
         } else {
             bg = 0xFF090A0D; bg2 = 0xFF12141A; card = 0xFF191C24; elevated = 0xFF222633;
             text = 0xFFFFFFFF; text2 = 0xFF9298A5; accent = 0xFF8B72FF; accent2 = 0xFF5C8DFF;
-            ring = 0xFFFFFFFF; hairline = 0x14FFFFFF; scrim = 0x99000000;
+            ring = 0xFFFFFFFF; hairline = 0x14FFFFFF; scrim = 0x99000000; onFocus = 0xFF090A0D;
         }
         buildWallpaper();
     }
@@ -47,11 +50,6 @@ final class Theme {
         return reduceMotion ? 0 : ms;
     }
 
-    static float focusScale() {
-        return reduceMotion ? 1f : 1.04f;
-    }
-
-    /** A flat background with one faint accent glow: subtle depth, no busy gradients. */
     private static void buildWallpaper() {
         int w = 480, h = 270;
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
@@ -67,14 +65,25 @@ final class Theme {
                 new int[]{glow2, accent2 & 0x00FFFFFF}, null, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, w, h, p);
         wallpaper = b;
-
-        Bitmap s = Bitmap.createScaledBitmap(b, w / 4, h / 4, true).copy(Bitmap.Config.ARGB_8888, true);
-        boxBlur(s, 3);
-        boxBlur(s, 3);
-        frosted = s;
     }
 
-    private static void boxBlur(Bitmap bmp, int r) {
+    /** Tiny, heavily blurred copy of an image for the top-shelf backdrop (~14 KB). */
+    static Bitmap blurred(Bitmap src) {
+        if (src == null) return null;
+        int w = 64, h = 36;
+        Bitmap s = Bitmap.createScaledBitmap(src, w, h, true);
+        if (s.getConfig() != Bitmap.Config.ARGB_8888 || !s.isMutable()) {
+            Bitmap c = s.copy(Bitmap.Config.ARGB_8888, true);
+            if (s != src) s.recycle();
+            s = c;
+        }
+        boxBlur(s, 3);
+        boxBlur(s, 3);
+        boxBlur(s, 2);
+        return s;
+    }
+
+    static void boxBlur(Bitmap bmp, int r) {
         int w = bmp.getWidth(), h = bmp.getHeight();
         int[] a = new int[w * h];
         int[] t = new int[w * h];
@@ -104,56 +113,28 @@ final class Theme {
         }
     }
 
-    /** Keeps a glass surface's frosted sample aligned with where it sits on screen. */
-    static void track(final View v, final Surface s) {
-        v.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
-            final int[] p = new int[2];
-
-            @Override
-            public void onLayoutChange(View view, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
-                view.getLocationOnScreen(p);
-                if (s.setOffset(p[0], p[1])) view.invalidate();
-            }
-        });
-    }
-
     /**
-     * Rounded surface. Cards are a solid fill (cheapest possible). Glass is used
-     * sparingly (nav bar, panels): a pre-blurred wallpaper sample + translucent tint,
-     * so there is no live blur cost on any frame.
+     * Rounded surface. Focus follows the TV convention: the focused control turns
+     * solid (white in dark mode) and its content flips to dark.
      */
     static final class Surface extends Drawable {
         final float radius;
         private final float d;
-        private int role;
+        private final int role;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint frost = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint sheen = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
-        private final Matrix m = new Matrix();
-        private Bitmap shaderSrc;
-        private int sx, sy;
-        boolean focused, moving, selected;
+        boolean focused, moving, selected, active;
 
         Surface(int role, float radius, float density) {
             this.role = role;
             this.radius = radius;
             this.d = density;
             stroke.setStyle(Paint.Style.STROKE);
-        }
-
-        void setRole(int r) {
-            role = r;
-            invalidateSelf();
-        }
-
-        boolean setOffset(int x, int y) {
-            if (x == sx && y == sy) return false;
-            sx = x;
-            sy = y;
-            shaderSrc = null;
-            invalidateSelf();
-            return true;
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeWidth(1.5f * density);
         }
 
         void setFocused(boolean f) {
@@ -172,42 +153,48 @@ final class Theme {
             invalidateSelf();
         }
 
+        void setActive(boolean a) {
+            active = a;
+            invalidateSelf();
+        }
+
         @Override
         protected void onBoundsChange(Rect b) {
             rect.set(b);
-            rect.inset(d, d);
-        }
-
-        private void ensureShader() {
-            Bitmap f = frosted;
-            if (f == null || f == shaderSrc) return;
-            shaderSrc = f;
-            BitmapShader s = new BitmapShader(f, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-            m.setScale(screenW / (float) f.getWidth(), screenH / (float) f.getHeight());
-            m.postTranslate(-sx, -sy);
-            s.setLocalMatrix(m);
-            frost.setShader(s);
+            rect.inset(d * 0.75f, d * 0.75f);
+            float top = b.top, h = b.height();
+            sheen.setShader(new LinearGradient(0, top, 0, top + h * 0.55f,
+                    light ? 0x66FFFFFF : 0x1FFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+            rim.setShader(new LinearGradient(0, top, 0, top + h,
+                    light ? 0xCCFFFFFF : 0x80FFFFFF, light ? 0x330E1015 : 0x0FFFFFFF, Shader.TileMode.CLAMP));
         }
 
         void drawFill(Canvas c) {
+            if (focused && role != ROLE_ELEVATED) {
+                fill.setColor(ring);
+                c.drawRoundRect(rect, radius, radius, fill);
+                return;
+            }
             switch (role) {
                 case ROLE_CARD:
-                    fill.setColor(focused ? elevated : card);
+                    fill.setColor(active ? (accent & 0x00FFFFFF) | 0x59000000 : card);
                     c.drawRoundRect(rect, radius, radius, fill);
                     break;
                 case ROLE_ELEVATED:
                     fill.setColor(elevated);
                     c.drawRoundRect(rect, radius, radius, fill);
+                    c.drawRoundRect(rect, radius, radius, sheen);
                     break;
                 case ROLE_GLASS:
-                    ensureShader();
-                    c.drawRoundRect(rect, radius, radius, frost);
-                    fill.setColor((card & 0x00FFFFFF) | (light ? 0xB3000000 : 0x99000000));
+                    fill.setColor(light ? 0xB3FFFFFF : 0x2E9AA3B8);
                     c.drawRoundRect(rect, radius, radius, fill);
+                    fill.setColor(light ? 0x14FFFFFF : 0x40090A0D);
+                    c.drawRoundRect(rect, radius, radius, fill);
+                    c.drawRoundRect(rect, radius, radius, sheen);
                     break;
                 default:
-                    if (focused || selected) {
-                        fill.setColor(focused ? elevated : (text & 0x00FFFFFF) | 0x14000000);
+                    if (active || selected) {
+                        fill.setColor(active ? (accent & 0x00FFFFFF) | 0x59000000 : (text & 0x00FFFFFF) | 0x1A000000);
                         c.drawRoundRect(rect, radius, radius, fill);
                     }
                     break;
@@ -216,18 +203,19 @@ final class Theme {
 
         void drawStroke(Canvas c) {
             if (moving) {
-                stroke.setStrokeWidth(2.5f * d);
+                stroke.setStrokeWidth(3f * d);
                 stroke.setColor(accent);
-            } else if (focused) {
-                stroke.setStrokeWidth(2.5f * d);
-                stroke.setColor(ring);
-            } else if (role == ROLE_NONE) {
+                c.drawRoundRect(rect, radius, radius, stroke);
                 return;
-            } else {
+            }
+            if (focused && role != ROLE_ELEVATED) return;
+            if (role == ROLE_GLASS || role == ROLE_ELEVATED) {
+                c.drawRoundRect(rect, radius, radius, rim);    // specular edge
+            } else if (role == ROLE_CARD) {
                 stroke.setStrokeWidth(d);
                 stroke.setColor(hairline);
+                c.drawRoundRect(rect, radius, radius, stroke);
             }
-            c.drawRoundRect(rect, radius, radius, stroke);
         }
 
         @Override

@@ -40,11 +40,12 @@ final class IconButton extends View {
     protected void onFocusChanged(boolean gain, int dir, Rect prev) {
         super.onFocusChanged(gain, dir, prev);
         surface.setFocused(gain);
+        invalidate();
     }
 
     @Override
     protected void onDraw(Canvas c) {
-        paint.setColor(isFocusable() ? Theme.text : Theme.text2);
+        paint.setColor(isFocused() ? Theme.onFocus : isFocusable() ? Theme.text : Theme.text2);
         Icons.draw(c, icon, size / 2f, size / 2f, size * 0.5f, paint);
     }
 }

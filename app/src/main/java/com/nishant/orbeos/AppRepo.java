@@ -187,7 +187,14 @@ final class AppRepo {
                         out = Bitmap.createBitmap(tw, th, Bitmap.Config.RGB_565);
                         Canvas c = new Canvas(out);
                         c.drawColor(0xFF191C24);
-                        d.setBounds(0, 0, tw, th);
+                        // Cover-fit the (usually 16:9) banner into the 5:3 tile.
+                        int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
+                        float ratio = iw > 0 && ih > 0 ? iw / (float) ih : 16f / 9f;
+                        int dw = tw, dh = th;
+                        if (ratio > tw / (float) th) dw = Math.round(th * ratio);
+                        else dh = Math.round(tw / ratio);
+                        int left = (tw - dw) / 2, top = (th - dh) / 2;
+                        d.setBounds(left, top, left + dw, top + dh);
                         d.draw(c);
                         banner = true;
                     } else {

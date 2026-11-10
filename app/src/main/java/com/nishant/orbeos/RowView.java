@@ -34,7 +34,7 @@ final class RowView extends View {
         height = Math.round(heightDp * density);
         this.icon = icon;
         this.label = label;
-        surface = new Theme.Surface(Theme.ROLE_NONE, 14 * density, density);
+        surface = new Theme.Surface(Theme.ROLE_NONE, 16 * density, density);
         setBackground(surface);
         iconPaint = Icons.paint(density);
         labelPaint.setTextSize(17 * density);
@@ -67,6 +67,7 @@ final class RowView extends View {
     protected void onFocusChanged(boolean gain, int dir, Rect prev) {
         super.onFocusChanged(gain, dir, prev);
         surface.setFocused(gain);
+        invalidate();
     }
 
     @Override
@@ -75,13 +76,14 @@ final class RowView extends View {
         float pad = 16 * d;
         float x = pad;
         if (icon != 0) {
-            iconPaint.setColor(Theme.text);
+            iconPaint.setColor(isFocused() ? Theme.onFocus : Theme.text);
             Icons.draw(c, icon, x + 12 * d, h / 2f, 24 * d, iconPaint);
             x += 40 * d;
         }
         float right = w - pad;
         if (value != null) {
-            valuePaint.setColor(accentValue ? Theme.accent : Theme.text2);
+            valuePaint.setColor(isFocused() ? (Theme.onFocus & 0x00FFFFFF) | 0xB3000000
+                    : accentValue ? Theme.accent : Theme.text2);
             float vy = h / 2f - (valuePaint.descent() + valuePaint.ascent()) / 2f;
             c.drawText(value, right, vy, valuePaint);
             right -= valuePaint.measureText(value) + 16 * d;
@@ -99,7 +101,7 @@ final class RowView extends View {
                 right = bl - 16 * d;
             }
         }
-        labelPaint.setColor(Theme.text);
+        labelPaint.setColor(isFocused() ? Theme.onFocus : Theme.text);
         CharSequence shown = TextUtils.ellipsize(label, labelPaint, Math.max(0, right - x), TextUtils.TruncateAt.END);
         float ly = h / 2f - (labelPaint.descent() + labelPaint.ascent()) / 2f;
         c.drawText(shown, 0, shown.length(), x, ly, labelPaint);
