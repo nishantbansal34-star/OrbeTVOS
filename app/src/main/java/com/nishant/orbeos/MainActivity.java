@@ -553,7 +553,7 @@ public final class MainActivity extends Activity {
     }
 
     private HorizontalScrollView rowScroller(LinearLayout row) {
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
+        HorizontalScrollView hsv = new RowScroller(this);
         hsv.setHorizontalScrollBarEnabled(false);
         hsv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         hsv.setSmoothScrollingEnabled(true);
@@ -746,7 +746,7 @@ public final class MainActivity extends Activity {
         widgets.setClipChildren(false);
         weatherWidget = new WidgetView(this, 186, 118, density);
         weatherWidget.headIcon = Icons.SUN;
-        weatherWidget.set(dateShort(), "--°", "Getting weather…");
+        weatherWidget.set(prefs.getString("wCity", "Aligarh"), "--°", "Getting weather…");
         weatherWidget.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -974,7 +974,7 @@ public final class MainActivity extends Activity {
             @Override
             public void onFocusChange(View v, boolean has) {
                 if (!has) return;
-                setHero(a.kind, a.label, "OK to open  ·  Hold OK for options");
+                setHero(kindLabel(a), a.label, "OK to open  ·  Hold OK for options");
                 if (currentPage == PAGE_HOME) backdrop.show(t.art());
                 if (section.equals("apps")) scrollHomeTop();
             }
@@ -1047,6 +1047,14 @@ public final class MainActivity extends Activity {
         return t;
     }
 
+    private String kindLabel(AppRepo.AppEntry a) {
+        Long ms = watchToday.get(a.pkg);
+        String watched = ms != null && ms >= 60_000L ? "Watched " + ScreenTime.fmt(ms) + " today" : "";
+        String kind = "App".equals(a.kind) ? "" : a.kind;
+        if (kind.isEmpty()) return watched;
+        return watched.isEmpty() ? kind : kind + "  ·  " + watched;
+    }
+
     private String dateShort() {
         return new SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(new Date());
     }
@@ -1078,7 +1086,7 @@ public final class MainActivity extends Activity {
                             weather = res;
                             showWeather();
                         } else if (weather == null && weatherWidget != null) {
-                            weatherWidget.set(city + "  ·  " + dateShort(), "--°", "Weather unavailable");
+                            weatherWidget.set(city, "--°", "Weather unavailable");
                         }
                     }
                 });
@@ -1089,8 +1097,8 @@ public final class MainActivity extends Activity {
     private void showWeather() {
         if (weatherWidget == null || weather == null) return;
         weatherWidget.sideIcon = Weather.icon(weather.code, weather.day);
-        weatherWidget.headIcon = Icons.CLOCK;
-        weatherWidget.set(weather.city + "  ·  " + dateShort(), Math.round(weather.temp) + "°",
+        weatherWidget.headIcon = Icons.SUN;
+        weatherWidget.set(weather.city, Math.round(weather.temp) + "°",
                 Weather.describe(weather.code) + "  ·  H " + Math.round(weather.hi) + "°  L " + Math.round(weather.lo) + "°");
     }
 

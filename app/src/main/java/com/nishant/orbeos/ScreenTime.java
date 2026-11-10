@@ -25,6 +25,9 @@ final class ScreenTime {
     private static final String[] IGNORE = {
             "com.android.systemui", "com.google.android.apps.tv.launcherx", "com.google.android.tvlauncher",
             "com.google.android.leanbacklauncher", "com.google.android.tungsten.setupwraith", "android",
+            "com.android.tv.settings", "com.android.settings", "com.google.android.tv.settings",
+            "com.google.android.katniss", "com.google.android.apps.tv.dreamx", "com.android.packageinstaller",
+            "com.google.android.packageinstaller", "com.google.android.permissioncontroller",
     };
 
     private ScreenTime() {}
