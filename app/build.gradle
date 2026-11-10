@@ -1,0 +1,53 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.nishant.orbeos'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.nishant.orbeos'
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // Fixed key so every new build installs as an update over the old one.
+    signingConfigs {
+        release {
+            storeFile file('release.keystore')
+            storePassword 'orbeos123'
+            keyAlias 'orbeos'
+            keyPassword 'orbeos123'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    dependenciesInfo {
+        includeInApk false
+        includeInBundle false
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+// No dependencies on purpose: no AndroidX, no Compose, no Kotlin runtime.
+// Plain framework Views keep the APK tiny and the RAM footprint minimal.
